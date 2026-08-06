@@ -1,0 +1,25 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Oasis Curator Icon">
+  <title>Oasis Curator Icon</title>
+  <desc>用于 Favicon、App Icon 等小尺寸场景的简化版 Logo。</desc>
+
+  <!-- 圆环（极简 stroke） -->
+  <path d="M 12 14 A 24 24 0 1 1 52 14"
+        fill="none"
+        stroke="#1A4D3E"
+        stroke-width="3.5"
+        stroke-linecap="round"/>
+
+  <!-- 门标：暖金小点 -->
+  <circle cx="32" cy="6" r="1.8" fill="#C9A84C"/>
+
+  <!-- 典籍（简化 V 形，双页同色） -->
+  <path d="M 14 44 L 32 38 L 50 44 L 50 50 L 32 45 L 14 50 Z" fill="#1A4D3E"/>
+
+  <!-- 托起的页面（暖金，作为唯一焦点） -->
+  <rect x="25" y="22" width="14" height="10" rx="1" fill="#C9A84C"/>
+
+  <!-- 手（最简化：两段曲线托住页面） -->
+  <path d="M 24 22 Q 24 28 28 30" fill="none" stroke="#1A4D3E" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M 40 22 Q 40 28 36 30" fill="none" stroke="#1A4D3E" stroke-width="2.2" stroke-linecap="round"/>
+  <line x1="32" y1="30" x2="32" y2="36" stroke="#1A4D3E" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

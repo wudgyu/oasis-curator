@@ -1,0 +1,191 @@
+# ============================================
+# Oasis Curator · .gitignore
+# 覆盖 Python 后端 / Vue 3 前端 / pnpm / Docker / IDE / OS
+# ============================================
+
+# ---------- 环境变量（保留 .env.example） ----------
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ---------- Python 后端 ----------
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# 字节码与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 打包与构建
+*.egg-info/
+*.egg
+build/
+dist/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 覆盖率
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# 离线模型权重（不应入库）
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# ---------- Node.js / pnpm / Vite 前端 ----------
+# 依赖
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
+# 构建产物
+dist/
+dist-ssr/
+*.local
+
+# Vite 缓存
+.vite/
+.cache/
+
+# 打包分析
+*.tgz
+.npm
+.eslintcache
+.stylelintcache
+
+# ---------- TypeScript / Vue ----------
+*.tsbuildinfo
+*.d.ts.map
+*.js.map
+*.vue.js
+
+# ---------- Docker / 数据卷 ----------
+data/
+uploads/
+chroma/
+milvus/
+postgres-data/
+mysql-data/
+
+# 本地模型与缓存
+ollama-data/
+hf-cache/
+
+# ---------- IDE / 编辑器 ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.iml
+*.iws
+*.ipr
+.fleet/
+.cursor/
+.aider*
+.windsurf/
+
+# Vim / Emacs / Nano 临时文件
+*.swp
+*.swo
+*~
+.\#*
+\#*\#
+.*.kate-swp
+.Session.vim
+.netrwhist
+*sublime-project
+*sublime-workspace
+
+# ---------- 操作系统 ----------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.Trash-*
+
+# ---------- 日志 ----------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# ---------- 测试与临时文件 ----------
+tmp/
+temp/
+.tmp/
+.cache/
+.parcel-cache/
+coverage/
+
+# ---------- 安全 / 凭据 ----------
+*.pem
+*.key
+*.crt
+secrets/
+*.secret
+credentials.json
+service-account*.json
+
+# ---------- 业务特定 ----------
+# 上传的原始文档（不要入库）
+backend/data/uploads/
+backend/data/chroma/
+backend/data/logs/
+
+# 前端构建缓存
+frontend/.cache/
+frontend/dist/
+frontend/.vite/
+
+# ---------- 其他 ----------
+# Git 本身
+.git/
+.gitignore.backup
+.gitconfig.local
+
+# 项目元数据
+*.bak
+*.orig
+*.rej
+.DS_Store?
+
+# ==================== 强制排除 / 强制包含 ====================
+# 即便 .gitignore 规则变更，下面的文件也不会被忽略
+!backend/requirements.txt
+!backend/requirements-*.txt
+!frontend/.npmrc
+!frontend/.nvmrc
