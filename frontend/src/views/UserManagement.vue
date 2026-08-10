@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, RefreshLeft } from '@element-plus/icons-vue'
 import { useUserStore, useTenantNames } from '@/stores/user'
 import type { User, UserFormData, UserRole } from '@/types'

@@ -78,10 +78,10 @@ function getStatusLabel(status: UserStatus): string {
     <el-table-column prop="createdAt" label="创建时间" width="180" />
     <el-table-column label="操作" width="160" fixed="right">
       <template #default="{ row }">
-        <el-button type="primary" link size="small" @click="emit('edit', row)">
+        <el-button type="primary" link size="small" @click="emit('edit', (row as User))">
           编辑
         </el-button>
-        <el-button type="danger" link size="small" @click="emit('delete', row)">
+        <el-button type="danger" link size="small" @click="emit('delete', (row as User))">
           删除
         </el-button>
       </template>
