@@ -22,8 +22,8 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { path: '/home', title: '首页', icon: HomeFilled },
-  { path: '/users', title: '用户管理', icon: UserFilled },
   { path: '/tenants', title: '租户管理', icon: OfficeBuilding },
+  { path: '/users', title: '用户管理', icon: UserFilled },
 ]
 
 const activeMenu = computed(() => route.path)
