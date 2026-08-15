@@ -3,13 +3,16 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { UserFilled, Lock } from '@element-plus/icons-vue'
 import type { FormInstance, FormRules } from 'element-plus'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * 登录页
- * 当前为纯前端占位版本，后续对接 FastAPI 认证后端
+ * 使用 Pinia authStore 管理登录状态
+ * 后续 Day 12-13 对接 FastAPI 认证后端，替换 Mock 登录为真实 API 调用
  */
 
 const router = useRouter()
+const authStore = useAuthStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
@@ -40,12 +43,16 @@ async function handleLogin(): Promise<void> {
     await formRef.value.validate()
     loading.value = true
 
-    // 模拟登录延迟（后续对接后端 API）
+    // 模拟登录延迟（后续对接 FastAPI 后端时替换为 API 调用）
     await new Promise((resolve) => setTimeout(resolve, 800))
 
-    // 简易鉴权：Mock 模式下任意用户名密码均可登录
-    localStorage.setItem('token', 'mock-jwt-token')
-    localStorage.setItem('username', formData.username)
+    // Mock 登录：任意用户名密码均可登录
+    // 后续替换为：const res = await request.post('/auth/login', formData)
+    authStore.login(
+      'mock-jwt-token',
+      formData.username,
+      { id: 'tenant-001', name: '星辰科技' },
+    )
     ElMessage.success('登录成功')
     router.push('/home')
   } catch {

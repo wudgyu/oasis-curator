@@ -1,10 +1,11 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import type { RouteRecordRaw, NavigationGuardNext, RouteLocationNormalized } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * 路由配置
- * - 登录页（无 Layout，独立页面）
- * - 主布局（AppLayout）包裹的管理页面
+ * - /login：独立页面，无 Layout 包裹
+ * - / (AppLayout)：主布局包裹的管理页面
  */
 
 const routes: RouteRecordRaw[] = [
@@ -42,16 +43,20 @@ const router = createRouter({
 
 /**
  * 全局前置导航守卫
- * 检查 token 是否存在，未登录用户重定向到登录页
+ * 使用 Pinia authStore 校验登录状态
+ *
+ * 类比：Spring Security FilterChainProxy
+ * - noAuth meta → 放行（类似 permitAll）
+ * - 无 token → 重定向 /login（类似 AuthenticationEntryPoint）
  */
 router.beforeEach(
   (to: RouteLocationNormalized, _from: RouteLocationNormalized, next: NavigationGuardNext) => {
-    const token = localStorage.getItem('token')
+    // 在导航守卫中使用 Pinia store 需要在 app.use(pinia) 之后调用
+    const authStore = useAuthStore()
 
-    // 目标页面不需要认证（如登录页）
     if (to.meta.noAuth) {
       // 已登录用户访问登录页 → 重定向到首页
-      if (token) {
+      if (authStore.isLoggedIn) {
         next('/home')
         return
       }
@@ -60,7 +65,7 @@ router.beforeEach(
     }
 
     // 未登录 → 重定向到登录页
-    if (!token) {
+    if (!authStore.isLoggedIn) {
       next('/login')
       return
     }

@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import {
   HomeFilled,
   UserFilled,
+  SwitchButton,
 } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 
 interface MenuItem {
   path: string
@@ -24,6 +28,25 @@ const activeMenu = computed(() => route.path)
 
 function handleMenuSelect(path: string): void {
   router.push(path)
+}
+
+function handleLogout(): void {
+  ElMessageBox.confirm(
+    '确定要退出登录吗？',
+    '退出确认',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
+    .then(() => {
+      authStore.logout()
+      router.push('/login')
+    })
+    .catch(() => {
+      // 取消退出
+    })
 }
 </script>
 
@@ -58,6 +81,21 @@ function handleMenuSelect(path: string): void {
       <el-header height="56px">
         <div class="header-content">
           <span class="header-title">{{ route.meta.title || 'Oasis Curator' }}</span>
+          <div class="header-right">
+            <span class="header-tenant" v-if="authStore.tenantName">
+              租户：{{ authStore.tenantName }}
+            </span>
+            <span class="header-user">{{ authStore.username }}</span>
+            <el-button
+              type="danger"
+              :icon="SwitchButton"
+              text
+              size="small"
+              @click="handleLogout"
+            >
+              退出
+            </el-button>
+          </div>
         </div>
       </el-header>
       <el-main>
@@ -112,12 +150,32 @@ function handleMenuSelect(path: string): void {
 .header-content {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   width: 100%;
 }
 
 .header-title {
   font-size: 16px;
   font-weight: 500;
+  color: #303133;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-tenant {
+  font-size: 13px;
+  color: #909399;
+  padding: 2px 10px;
+  background: #f0f2f5;
+  border-radius: 4px;
+}
+
+.header-user {
+  font-size: 14px;
   color: #303133;
 }
 
