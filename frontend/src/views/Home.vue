@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { UserFilled, OfficeBuilding, DataAnalysis } from '@element-plus/icons-vue'
-import { useUserStore, useTenantNames } from '@/stores/user'
+import { useUserStore } from '@/stores/user'
+import { useTenantStore } from '@/stores/tenant'
 
 /**
  * 首页 / 仪表盘
@@ -9,7 +10,7 @@ import { useUserStore, useTenantNames } from '@/stores/user'
  */
 
 const userStore = useUserStore()
-const tenantNames = useTenantNames()
+const tenantStore = useTenantStore()
 
 interface StatCard {
   title: string
@@ -24,18 +25,18 @@ const stats = ref<StatCard[]>([])
 onMounted(() => {
   stats.value = [
     {
+      title: '租户数量',
+      value: tenantStore.tenants.length,
+      unit: '个',
+      icon: OfficeBuilding,
+      color: '#67C23A',
+    },
+    {
       title: '用户总数',
       value: userStore.users.length,
       unit: '人',
       icon: UserFilled,
       color: '#409EFF',
-    },
-    {
-      title: '租户数量',
-      value: tenantNames.length,
-      unit: '个',
-      icon: OfficeBuilding,
-      color: '#67C23A',
     },
     {
       title: '在线用户',
