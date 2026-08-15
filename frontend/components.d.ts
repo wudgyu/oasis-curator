@@ -35,6 +35,8 @@ declare module 'vue' {
     ElTag: typeof import('element-plus/es')['ElTag']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    TenantFormDialog: typeof import('./src/components/TenantFormDialog.vue')['default']
+    TenantTable: typeof import('./src/components/TenantTable.vue')['default']
     UserFormDialog: typeof import('./src/components/UserFormDialog.vue')['default']
     UserTable: typeof import('./src/components/UserTable.vue')['default']
   }
