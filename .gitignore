@@ -41,6 +41,7 @@ coverage.xml
 
 # 离线模型权重（不应入库）
 models/
+!backend/app/models/
 *.bin
 *.safetensors
 *.gguf
