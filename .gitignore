@@ -23,6 +23,9 @@ __pycache__/
 *$py.class
 *.so
 
+# 本地数据库
+*.db
+
 # 打包与构建
 *.egg-info/
 *.egg
