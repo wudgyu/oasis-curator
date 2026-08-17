@@ -89,9 +89,12 @@ instance.interceptors.response.use(
           }
           break
         }
-        case 403:
+        case 403: {
+          // 无 token 的 403 = 登出后残留的迟到请求（FastAPI HTTPBearer 缺凭证返回 403），静默丢弃
+          if (!localStorage.getItem('token')) break
           ElMessage.error(extractErrorMessage(error) ?? '没有操作权限')
           break
+        }
         case 404:
           ElMessage.error(extractErrorMessage(error) ?? '请求的资源不存在')
           break

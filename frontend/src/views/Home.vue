@@ -79,7 +79,12 @@ async function loadStats(): Promise<void> {
 onMounted(loadStats)
 
 // 导航栏切换租户后自动刷新统计
-watch(() => authStore.currentTenantId, loadStats)
+// 登出会清空 currentTenantId，此时不再发起请求（否则产生无凭证的 403 请求）
+watch(() => authStore.currentTenantId, (newId) => {
+  if (authStore.isLoggedIn && newId) {
+    loadStats()
+  }
+})
 </script>
 
 <template>

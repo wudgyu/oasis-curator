@@ -155,9 +155,11 @@ onMounted(() => {
 })
 
 // 导航栏切换租户后自动刷新当前租户的用户列表
+// 登出会清空 currentTenantId，此时不再发起请求（否则产生无凭证的 403 请求）
 watch(
   () => authStore.currentTenantId,
-  () => {
+  (newId) => {
+    if (!authStore.isLoggedIn || !newId) return
     // 同步清空页面筛选输入框
     filterUsername.value = ''
     filterRole.value = ''
