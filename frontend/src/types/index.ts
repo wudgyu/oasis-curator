@@ -1,21 +1,56 @@
-/** 用户角色枚举 */
-export type UserRole = 'admin' | 'editor' | 'viewer'
+/** RBAC 角色 code（admin 为平台内置，不可经业务 API 分配） */
+export type RoleCode = 'admin' | 'manager' | 'auditor' | 'employee'
+
+/** 可分配角色（排除平台 admin） */
+export type AssignableRoleCode = 'manager' | 'auditor' | 'employee'
 
 /** 用户状态 */
 export type UserStatus = 'active' | 'disabled'
+
+/** 租户简要信息 */
+export interface TenantBrief {
+  id: string
+  name: string
+}
+
+/** 组织简要信息 */
+export interface OrgBrief {
+  id: string
+  name: string
+  path: string
+}
+
+/** 组织树节点（嵌套结构，对接 /api/orgs/tree） */
+export interface OrgTreeNode {
+  id: string
+  name: string
+  path: string
+  parentId: string | null
+  userCount: number
+  children: OrgTreeNode[]
+}
+
+/** 组织实体（对接 /api/orgs） */
+export interface Org {
+  id: string
+  name: string
+  path: string
+  parentId: string | null
+  tenantId: string
+  createdAt: string
+  updatedAt: string
+}
 
 /** 用户实体（对接后端 /api/users） */
 export interface User {
   id: string
   username: string
   email: string
-  tenantId: string
-  tenantName: string
-  role: UserRole
+  org: Org
+  roleCode: RoleCode
   status: UserStatus
   createdAt: string
-  /** 可访问的其它租户 ID（不含主租户） */
-  tenantIds: string[]
+  updatedAt: string
 }
 
 /** 用户表单数据（新增/编辑） */
@@ -24,17 +59,23 @@ export interface UserFormData {
   email: string
   /** 新增时必填；编辑时留空表示不修改 */
   password: string
-  role: UserRole
+  orgId: string
+  roleCode: AssignableRoleCode
   status: UserStatus
-  /** 可访问的其它租户 ID（不含主租户） */
-  tenantIds?: string[]
 }
 
-/** 搜索筛选条件 */
+/** 用户筛选条件 */
 export interface UserFilter {
   username: string
-  role: UserRole | ''
+  role: RoleCode | ''
   status: UserStatus | ''
+  orgId: string
+}
+
+/** 可选角色项（对接 /api/roles） */
+export interface RoleOption {
+  code: AssignableRoleCode
+  name: string
 }
 
 /** 分页参数 */
@@ -88,16 +129,10 @@ export interface UserInfo {
   id: string
   username: string
   email: string
-  tenantId: string
-  tenantName: string
-  role: UserRole
+  roleCode: RoleCode
   status: UserStatus
-  /** 可访问的租户列表（主租户在前），用于切换当前租户 */
-  accessibleTenants: TenantBrief[]
-}
-
-/** 租户简要信息 */
-export interface TenantBrief {
-  id: string
-  name: string
+  /** 平台管理员为 null */
+  tenant: TenantBrief | null
+  /** 平台管理员为 null */
+  org: OrgBrief | null
 }

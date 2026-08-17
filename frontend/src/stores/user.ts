@@ -4,10 +4,10 @@ import type { User, UserFormData, UserFilter } from '@/types'
 import { fetchUsers, createUser, updateUser, deleteUser } from '@/api/users'
 
 /**
- * 用户管理 Store（服务端分页 + 筛选）
+ * 用户管理 Store（服务端分页 + 筛选 + 角色数据范围）
  *
- * 数据由 FastAPI 后端提供，筛选和分页在服务端完成。
- * 租户隔离由后端根据 JWT 中的 tenant_id 自动处理。
+ * 数据由 FastAPI 后端提供，后端自动按当前用户角色的数据范围过滤：
+ * employee 仅本组织 / auditor·manager 子树 / admin 上下文租户全量。
  */
 export const useUserStore = defineStore('user', () => {
   // ---------- 状态 ----------
@@ -21,6 +21,7 @@ export const useUserStore = defineStore('user', () => {
     username: '',
     role: '',
     status: '',
+    orgId: '',
   })
   const page = ref(1)
   const pageSize = ref(10)
@@ -36,6 +37,8 @@ export const useUserStore = defineStore('user', () => {
         username: filter.value.username || undefined,
         role: filter.value.role || undefined,
         status: filter.value.status || undefined,
+        orgId: filter.value.orgId || undefined,
+        includeChildren: !!filter.value.orgId, // 按组织筛选默认含子树
       })
       users.value = result.items
       total.value = result.total
@@ -58,7 +61,7 @@ export const useUserStore = defineStore('user', () => {
 
   /** 重置筛选条件并重新查询 */
   function resetFilter(): void {
-    filter.value = { username: '', role: '', status: '' }
+    filter.value = { username: '', role: '', status: '', orgId: '' }
     page.value = 1
     fetchUserList()
   }

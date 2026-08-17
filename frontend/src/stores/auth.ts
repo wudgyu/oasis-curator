@@ -1,17 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { TenantBrief, UserRole } from '@/types'
+import type { RoleCode, TenantBrief, OrgBrief } from '@/types'
 import * as authApi from '@/api/auth'
 
 /**
- * 认证授权 Store
- * 管理登录状态、Token、用户信息、租户上下文
+ * 认证授权 Store（RBAC 模型）
+ * 管理登录状态、Token、用户信息、租户/组织上下文
  *
- * 类比：Spring SecurityContext + 自定义 Session 管理
- * - state.token ≈ JWT Token（存 localStorage 持久化）
- * - state.role ≈ 用户角色（前端按钮权限判断依据）
- * - isLoggedIn ≈ SecurityContext 是否有有效认证
- * - currentTenantId ≈ 当前租户上下文（可切换，随请求头 X-Tenant-Id 传递）
+ * - roleCode: admin（平台管理员）/ manager / auditor / employee
+ * - 普通用户唯一归属一个租户；admin 通过 currentTenantId 切换工作区
+ * - 角色变更以后端为准（每次刷新 /auth/me 重新拉取）
  */
 export const useAuthStore = defineStore('auth', () => {
   // ---------- 状态 ----------
@@ -19,13 +17,14 @@ export const useAuthStore = defineStore('auth', () => {
   const userId = ref<string>(localStorage.getItem('userId') || '')
   const username = ref<string>(localStorage.getItem('username') || '')
   const email = ref<string>(localStorage.getItem('email') || '')
-  const role = ref<UserRole>((localStorage.getItem('role') as UserRole) || 'viewer')
+  const roleCode = ref<RoleCode>((localStorage.getItem('roleCode') as RoleCode) || 'employee')
   const tenantId = ref<string>(localStorage.getItem('tenantId') || '')
   const tenantName = ref<string>(localStorage.getItem('tenantName') || '')
+  const orgId = ref<string>(localStorage.getItem('orgId') || '')
+  const orgName = ref<string>(localStorage.getItem('orgName') || '')
+  const orgPath = ref<string>(localStorage.getItem('orgPath') || '')
 
-  /** 可访问的租户列表（主租户在前） */
-  const accessibleTenants = ref<TenantBrief[]>([])
-  /** 当前上下文租户 ID（可切换） */
+  /** admin 当前工作区租户（普通用户恒等于自身租户） */
   const currentTenantId = ref<string>(
     localStorage.getItem('currentTenantId') || tenantId.value || '',
   )
@@ -33,49 +32,52 @@ export const useAuthStore = defineStore('auth', () => {
   // ---------- 计算属性 (Getters) ----------
   const isLoggedIn = computed(() => !!token.value)
 
-  /** 是否为管理员（控制前端按钮显隐） */
-  const isAdmin = computed(() => role.value === 'admin')
+  /** 是否为平台管理员 */
+  const isAdmin = computed(() => roleCode.value === 'admin')
 
-  /** 当前上下文租户名称（未加载租户列表时回退主租户名） */
-  const currentTenantName = computed(() => {
-    const found = accessibleTenants.value.find((t) => t.id === currentTenantId.value)
-    return found?.name ?? tenantName.value
-  })
+  /** 是否有写权限（admin / manager） */
+  const canWrite = computed(() => ['admin', 'manager'].includes(roleCode.value))
 
-  /** 是否显示租户切换器（可访问租户大于 1 个时） */
-  const canSwitchTenant = computed(() => accessibleTenants.value.length > 1)
+  /** 是否显示租户切换器（仅 admin） */
+  const canSwitchTenant = computed(() => isAdmin.value)
 
   // ---------- 方法 (Actions) ----------
-  /** 将用户信息写入状态与 localStorage */
+  /** 将 /auth/me 的用户信息写入状态与 localStorage */
   function applyUserInfo(userInfo: {
     id: string
     username: string
     email: string
-    tenantId: string
-    tenantName: string
-    role: UserRole
-    accessibleTenants: TenantBrief[]
+    roleCode: RoleCode
+    tenant: TenantBrief | null
+    org: OrgBrief | null
   }): void {
     userId.value = userInfo.id
     username.value = userInfo.username
     email.value = userInfo.email
-    role.value = userInfo.role
-    tenantId.value = userInfo.tenantId
-    tenantName.value = userInfo.tenantName
-    accessibleTenants.value = userInfo.accessibleTenants
+    roleCode.value = userInfo.roleCode
+    tenantId.value = userInfo.tenant?.id ?? ''
+    tenantName.value = userInfo.tenant?.name ?? ''
+    orgId.value = userInfo.org?.id ?? ''
+    orgName.value = userInfo.org?.name ?? ''
+    orgPath.value = userInfo.org?.path ?? ''
 
-    // 首次登录或切换器未初始化时，上下文租户 = 主租户
-    if (!currentTenantId.value || currentTenantId.value !== localStorage.getItem('currentTenantId')) {
-      currentTenantId.value = userInfo.tenantId
-      localStorage.setItem('currentTenantId', userInfo.tenantId)
+    // 上下文租户：admin 保持已选工作区（无则默认首个可见租户 = 自身 tenant 为空的场景后续由租户列表回填）
+    if (currentTenantId.value === '' || !localStorage.getItem('currentTenantId')) {
+      currentTenantId.value = tenantId.value
+      if (currentTenantId.value) {
+        localStorage.setItem('currentTenantId', currentTenantId.value)
+      }
     }
 
     localStorage.setItem('userId', userInfo.id)
     localStorage.setItem('username', userInfo.username)
     localStorage.setItem('email', userInfo.email)
-    localStorage.setItem('role', userInfo.role)
-    localStorage.setItem('tenantId', userInfo.tenantId)
-    localStorage.setItem('tenantName', userInfo.tenantName)
+    localStorage.setItem('roleCode', userInfo.roleCode)
+    localStorage.setItem('tenantId', tenantId.value)
+    localStorage.setItem('tenantName', tenantName.value)
+    localStorage.setItem('orgId', orgId.value)
+    localStorage.setItem('orgName', orgName.value)
+    localStorage.setItem('orgPath', orgPath.value)
   }
 
   /**
@@ -109,8 +111,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   /**
-   * 切换当前上下文租户
-   * 切换后依赖该上下文的页面（用户列表、首页统计）自动刷新
+   * 切换 admin 的当前工作区租户
+   * 切换后依赖该上下文的页面（组织树、用户列表、首页统计）自动刷新
    */
   function switchTenant(tenantIdInput: string): void {
     currentTenantId.value = tenantIdInput
@@ -134,18 +136,23 @@ export const useAuthStore = defineStore('auth', () => {
     userId.value = ''
     username.value = ''
     email.value = ''
-    role.value = 'viewer'
+    roleCode.value = 'employee'
     tenantId.value = ''
     tenantName.value = ''
-    accessibleTenants.value = []
+    orgId.value = ''
+    orgName.value = ''
+    orgPath.value = ''
     currentTenantId.value = ''
     localStorage.removeItem('token')
     localStorage.removeItem('userId')
     localStorage.removeItem('username')
     localStorage.removeItem('email')
-    localStorage.removeItem('role')
+    localStorage.removeItem('roleCode')
     localStorage.removeItem('tenantId')
     localStorage.removeItem('tenantName')
+    localStorage.removeItem('orgId')
+    localStorage.removeItem('orgName')
+    localStorage.removeItem('orgPath')
     localStorage.removeItem('currentTenantId')
   }
 
@@ -155,15 +162,17 @@ export const useAuthStore = defineStore('auth', () => {
     userId,
     username,
     email,
-    role,
+    roleCode,
     tenantId,
     tenantName,
-    accessibleTenants,
+    orgId,
+    orgName,
+    orgPath,
     currentTenantId,
     // 计算属性
     isLoggedIn,
     isAdmin,
-    currentTenantName,
+    canWrite,
     canSwitchTenant,
     // 方法
     login,
