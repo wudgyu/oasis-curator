@@ -3,11 +3,12 @@
 
 - POST /api/auth/login    — 登录，返回 JWT Token
 - POST /api/auth/logout   — 登出
-- GET  /api/auth/me       — 获取当前用户信息（含可访问租户列表）
+- GET  /api/auth/me       — 获取当前用户信息（RBAC 新结构）
 
 依赖注入：
-- get_current_user       — 从 Bearer Token 解析当前用户
-- get_current_tenant_id  — 从 X-Tenant-Id 请求头解析上下文租户（默认主租户）
+- get_current_user        — 从 Bearer Token 解析当前用户（含角色）
+- get_context_tenant_id   — 解析上下文租户（admin 显式指定，普通用户固定为自身租户）
+- require_context_tenant_id — 要求必须携带上下文租户（组织/用户管理接口用）
 """
 
 from typing import Optional
@@ -19,9 +20,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
 from app.models.tenant import Tenant
-from app.models.user_tenant import UserTenant
-from app.schemas.auth import LoginRequest, TokenResponse, UserInfoResponse, TenantBrief
+from app.models.organization import Organization
+from app.schemas.auth import LoginRequest, TokenResponse, UserInfoResponse, TenantBrief, OrgBrief
 from app.core.security import verify_password, create_access_token, decode_access_token
+from app.core.permission import get_role_code
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
@@ -39,7 +41,8 @@ def get_current_user(
     """
     从请求头 Authorization: Bearer <token> 中解析当前用户
 
-    用于后续需要认证的接口依赖注入
+    用于后续需要认证的接口依赖注入。
+    每次请求从数据库实时加载用户与角色，角色变更立即生效。
     """
     token = credentials.credentials
     payload = decode_access_token(token)
@@ -73,37 +76,48 @@ def get_current_user(
     return user
 
 
-def get_accessible_tenant_ids(db: Session, user: User) -> list:
-    """
-    获取用户可访问的全部租户 ID（主租户 + 关联租户，去重）
-    """
-    ids = [user.tenant_id]
-    for row in db.query(UserTenant.tenant_id).filter(UserTenant.user_id == user.id).all():
-        if row[0] not in ids:
-            ids.append(row[0])
-    return ids
-
-
-def get_current_tenant_id(
+def get_context_tenant_id(
     current_user: User = Depends(get_current_user),
     x_tenant_id: Optional[str] = Header(None),
     db: Session = Depends(get_db),
-) -> str:
+) -> Optional[str]:
     """
-    解析当前上下文租户 ID
+    解析当前上下文租户 ID：
 
-    - 未携带 X-Tenant-Id 请求头 → 返回用户主租户
-    - 携带时校验用户是否有该租户的访问权限，无权限返回 403
+    - 平台 admin：以 X-Tenant-Id 为准（需存在），未携带返回 None（由调用方决定是否必须）
+    - 普通用户：固定为自身租户；伪造 X-Tenant-Id（不等于自身租户）返回 403
     """
-    if x_tenant_id is None:
-        return current_user.tenant_id
+    role_code = get_role_code(current_user, db)
+    if role_code == "admin":
+        if x_tenant_id is None:
+            return None
+        tenant = db.query(Tenant).filter(Tenant.id == x_tenant_id).first()
+        if tenant is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="上下文租户不存在",
+            )
+        return x_tenant_id
 
-    if x_tenant_id not in get_accessible_tenant_ids(db, current_user):
+    # 普通用户
+    if x_tenant_id is not None and x_tenant_id != current_user.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="无权访问该租户",
         )
-    return x_tenant_id
+    return current_user.tenant_id
+
+
+def require_context_tenant_id(
+    context_tenant_id: Optional[str] = Depends(get_context_tenant_id),
+) -> str:
+    """组织/用户管理接口必须携带上下文租户（admin 场景下强制 X-Tenant-Id）"""
+    if context_tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="缺少上下文租户（X-Tenant-Id 请求头）",
+        )
+    return context_tenant_id
 
 
 @router.post("/login", response_model=TokenResponse, summary="用户登录")
@@ -111,36 +125,40 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     """
     使用用户名和密码登录，返回 JWT Access Token。
 
-    Token 包含 user_id、tenant_id、role，有效期 24 小时。
+    用户名在租户内唯一，可能出现平台管理员与租户用户同名的情况：
+    密码匹配且唯一命中时登录成功。
     """
-    # 查找用户
-    user = db.query(User).filter(User.username == body.username).first()
-    if user is None:
+    # 用户名可能命中多个（平台管理员 + 各租户同名用户），逐个验证密码
+    candidates = db.query(User).filter(User.username == body.username).all()
+    matched: Optional[User] = None
+    for user in candidates:
+        if verify_password(body.password, user.password_hash):
+            if matched is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="账号存在冲突，请联系管理员",
+                )
+            matched = user
+
+    if matched is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
         )
 
-    # 验证密码
-    if not verify_password(body.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-        )
-
-    # 检查用户状态
-    if user.status == "disabled":
+    if matched.status == "disabled":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="账号已被禁用，请联系管理员",
         )
 
     # 生成 Token
+    role_code = get_role_code(matched, db)
     access_token = create_access_token(
         data={
-            "user_id": user.id,
-            "tenant_id": user.tenant_id,
-            "role": user.role,
+            "user_id": matched.id,
+            "tenant_id": matched.tenant_id,
+            "role": role_code,
         }
     )
 
@@ -161,31 +179,27 @@ def logout(current_user: User = Depends(get_current_user)):
 @router.get("/me", response_model=UserInfoResponse, summary="获取当前用户信息")
 def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    返回当前登录用户的详细信息，包含可访问的租户列表。
+    返回当前登录用户信息：role_code + 所属租户/组织（平台管理员为 null）。
     """
-    # 查询主租户名称
-    tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    role_code = get_role_code(current_user, db)
 
-    # 查询可访问租户列表（主租户在前 + 关联租户）
-    accessible_ids = get_accessible_tenant_ids(db, current_user)
-    tenant_map = (
-        {t.id: t.name for t in db.query(Tenant).filter(Tenant.id.in_(accessible_ids)).all()}
-        if accessible_ids
-        else {}
-    )
-    tenant_briefs = [
-        TenantBrief(id=tid, name=tenant_map[tid])
-        for tid in accessible_ids
-        if tid in tenant_map
-    ]
+    tenant_brief = None
+    org_brief = None
+    if current_user.tenant_id is not None:
+        tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+        if tenant is not None:
+            tenant_brief = TenantBrief(id=tenant.id, name=tenant.name)
+    if current_user.org_id is not None:
+        org = db.query(Organization).filter(Organization.id == current_user.org_id).first()
+        if org is not None:
+            org_brief = OrgBrief(id=org.id, name=org.name, path=org.path)
 
     return UserInfoResponse(
         id=current_user.id,
         username=current_user.username,
         email=current_user.email,
-        tenant_id=current_user.tenant_id,
-        tenant_name=tenant.name if tenant else "",
-        role=current_user.role,
+        role_code=role_code,
         status=current_user.status,
-        tenants=tenant_briefs,
+        tenant=tenant_brief,
+        org=org_brief,
     )

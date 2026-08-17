@@ -3,10 +3,10 @@
 
 - LoginRequest: 登录请求
 - TokenResponse: 登录成功返回的 Token
-- UserInfoResponse: 当前用户信息（含可访问租户列表）
+- UserInfoResponse: 当前用户信息（RBAC 新结构：role_code + tenant + org）
 """
 
-from typing import List
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,9 +24,16 @@ class TokenResponse(BaseModel):
 
 
 class TenantBrief(BaseModel):
-    """租户简要信息（用于切换器展示）"""
+    """租户简要信息"""
     id: str
     name: str
+
+
+class OrgBrief(BaseModel):
+    """组织简要信息"""
+    id: str
+    name: str
+    path: str
 
 
 class UserInfoResponse(BaseModel):
@@ -34,12 +41,11 @@ class UserInfoResponse(BaseModel):
     id: str
     username: str
     email: str
-    tenant_id: str
-    tenant_name: str = ""
-    role: str
+    role_code: str
     status: str
-    # 可访问的租户列表（主租户 + 关联租户），用于前端切换当前租户
-    tenants: List[TenantBrief] = []
+    # 平台管理员为 null；普通用户为所属租户/组织
+    tenant: Optional[TenantBrief] = None
+    org: Optional[OrgBrief] = None
 
     class Config:
         from_attributes = True

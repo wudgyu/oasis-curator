@@ -15,18 +15,22 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.organization import Organization
 from app.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse, TenantListResponse
 from app.api.auth import get_current_user
+from app.core.permission import get_role_code
 
 router = APIRouter(prefix="/api/tenants", tags=["租户管理"])
 
 
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    """权限校验：仅 admin 角色可访问"""
-    if current_user.role != "admin":
+def require_admin(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> User:
+    """权限校验：仅平台 admin 角色可访问"""
+    if get_role_code(current_user, db) != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅管理员可执行此操作",
+            detail="仅平台管理员可执行此操作",
         )
     return current_user
 
@@ -97,6 +101,16 @@ def create_tenant(
 
     tenant = Tenant(name=body.name, plan=body.plan, status=body.status)
     db.add(tenant)
+    db.flush()
+
+    # 同一事务内自动创建根组织（名 = 租户名，path 依赖自身 ID）
+    root_org = Organization(
+        tenant_id=tenant.id, parent_id=None, name=body.name, path=""
+    )
+    db.add(root_org)
+    db.flush()
+    root_org.path = f"/{root_org.id}/"
+
     db.commit()
     db.refresh(tenant)
     return tenant_to_response(tenant)
@@ -154,9 +168,10 @@ def delete_tenant(
             detail="租户不存在",
         )
 
-    # 级联删除关联用户
+    # 级联删除用户与组织树
     db.query(User).filter(User.tenant_id == tenant_id).delete()
+    db.query(Organization).filter(Organization.tenant_id == tenant_id).delete()
     db.delete(tenant)
     db.commit()
 
-    return {"message": f"已删除租户「{tenant.name}」及其关联用户"}
+    return {"message": f"已删除租户「{tenant.name}」及其组织与用户"}
