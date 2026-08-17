@@ -7,14 +7,17 @@ import { fetchTenants } from '@/api/tenants'
 
 /**
  * 首页 / 仪表盘
- * 通过后端 API 获取真实统计数据（page_size=1 仅取总数）
- * 统计范围 = 当前上下文租户，导航栏切换租户后自动刷新
+ * 统计范围 = 当前用户角色的数据范围（后端自动过滤）：
+ * - employee：本组织
+ * - auditor / manager：本组织 + 子组织
+ * - admin：上下文租户（X-Tenant-Id）
  */
 
 const authStore = useAuthStore()
 
 interface StatCard {
   title: string
+  subtitle: string
   value: number
   unit: string
   icon: typeof UserFilled
@@ -24,18 +27,24 @@ interface StatCard {
 const stats = ref<StatCard[]>([])
 const statsLoading = ref(true)
 
-const quickActions = computed(() => {
-  const actions = [{ path: '/users', label: '用户管理' }]
+/** 当前统计范围描述 */
+const scopeLabel = computed(() => {
   if (authStore.isAdmin) {
-    actions.unshift({ path: '/tenants', label: '租户管理' })
+    return authStore.tenantName || '上下文租户'
   }
-  return actions
+  if (authStore.roleCode === 'manager') {
+    return `${authStore.orgName}（含子组织）`
+  }
+  if (authStore.roleCode === 'auditor') {
+    return `${authStore.orgName}（含子组织）`
+  }
+  return authStore.orgName || '本组织'
 })
 
 async function loadStats(): Promise<void> {
   statsLoading.value = true
   try {
-    // 并行获取当前上下文租户的统计数据
+    // 并行获取当前范围内的统计数据（后端按角色范围过滤）
     const [userTotal, activeUserTotal] = await Promise.all([
       fetchUsers({ page: 1, pageSize: 1 }),
       fetchUsers({ page: 1, pageSize: 1, status: 'active' }),
@@ -44,6 +53,7 @@ async function loadStats(): Promise<void> {
     const cards: StatCard[] = [
       {
         title: '用户总数',
+        subtitle: scopeLabel.value,
         value: userTotal.total,
         unit: '人',
         icon: UserFilled,
@@ -51,6 +61,7 @@ async function loadStats(): Promise<void> {
       },
       {
         title: '启用用户',
+        subtitle: scopeLabel.value,
         value: activeUserTotal.total,
         unit: '人',
         icon: DataAnalysis,
@@ -63,6 +74,7 @@ async function loadStats(): Promise<void> {
       const tenantTotal = await fetchTenants({ page: 1, pageSize: 1 })
       cards.unshift({
         title: '租户数量',
+        subtitle: '平台全局',
         value: tenantTotal.total,
         unit: '个',
         icon: OfficeBuilding,
@@ -78,7 +90,7 @@ async function loadStats(): Promise<void> {
 
 onMounted(loadStats)
 
-// 导航栏切换租户后自动刷新统计
+// admin 切换工作区租户后自动刷新统计
 // 登出会清空 currentTenantId，此时不再发起请求（否则产生无凭证的 403 请求）
 watch(() => authStore.currentTenantId, (newId) => {
   if (authStore.isLoggedIn && newId) {
@@ -101,7 +113,10 @@ watch(() => authStore.currentTenantId, (newId) => {
       >
         <div class="stat-content">
           <div class="stat-info">
-            <span class="stat-title">{{ stat.title }}</span>
+            <span class="stat-title">
+              {{ stat.title }}
+              <small class="stat-scope">{{ stat.subtitle }}</small>
+            </span>
             <span class="stat-value">
               {{ stat.value }}
               <small>{{ stat.unit }}</small>
@@ -122,14 +137,19 @@ watch(() => authStore.currentTenantId, (newId) => {
         <span>快速入口</span>
       </template>
       <div class="action-list">
+        <el-button type="primary" plain @click="$router.push('/orgs')">
+          组织管理
+        </el-button>
+        <el-button type="primary" plain @click="$router.push('/users')">
+          用户管理
+        </el-button>
         <el-button
-          v-for="action in quickActions"
-          :key="action.path"
+          v-if="authStore.isAdmin"
           type="primary"
           plain
-          @click="$router.push(action.path)"
+          @click="$router.push('/tenants')"
         >
-          {{ action.label }}
+          租户管理
         </el-button>
       </div>
     </el-card>
@@ -174,6 +194,14 @@ watch(() => authStore.currentTenantId, (newId) => {
   font-size: 14px;
   color: #909399;
   margin-bottom: 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.stat-scope {
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 .stat-value {
@@ -199,7 +227,7 @@ watch(() => authStore.currentTenantId, (newId) => {
 }
 
 .quick-actions {
-  max-width: 600px;
+  max-width: 700px;
 }
 
 .action-list {

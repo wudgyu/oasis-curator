@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { UserFormData, TenantBrief } from '@/types'
+import type { UserFormData, OrgTreeNode, RoleOption } from '@/types'
 
 /**
- * 用户表单对话框组件
- * 展示 defineProps<T>() 和 defineEmits<T>() 的泛型用法，
- * 以及 watch 监听 props 变化以回填表单数据
+ * 用户表单对话框组件（RBAC 模型）
  *
- * 新增时密码必填；编辑时密码留空表示不修改。
- * 用户主租户由上下文租户决定；tenantIds 指定可访问的其它租户。
+ * - 组织选择：树形选择器（manager 仅可见其子树内组织，由父组件过滤后传入）
+ * - 角色选择：manager / auditor / employee（可分配角色下拉）
+ * - 新增时密码必填；编辑时密码留空表示不修改
  */
 
 // ---------- Props ----------
@@ -20,8 +19,10 @@ const props = defineProps<{
   isEditing: boolean
   /** 表单初始数据（编辑时传入已有用户数据） */
   initialData?: UserFormData
-  /** 可选的关联租户列表（已排除用户主租户） */
-  tenantOptions?: TenantBrief[]
+  /** 可选组织树（已按权限过滤） */
+  orgTree: OrgTreeNode[]
+  /** 可分配角色列表 */
+  roleOptions: RoleOption[]
 }>()
 
 // ---------- Emits ----------
@@ -39,9 +40,9 @@ const formData = reactive<UserFormData>({
   username: '',
   email: '',
   password: '',
-  role: 'viewer',
+  orgId: '',
+  roleCode: 'employee',
   status: 'active',
-  tenantIds: [],
 })
 
 const formRules = computed<FormRules>(() => ({
@@ -59,7 +60,10 @@ const formRules = computed<FormRules>(() => ({
         { required: true, message: '请输入密码', trigger: 'blur' },
         { min: 6, max: 128, message: '密码长度在 6 到 128 个字符', trigger: 'blur' },
       ],
-  role: [
+  orgId: [
+    { required: true, message: '请选择所属组织', trigger: 'change' },
+  ],
+  roleCode: [
     { required: true, message: '请选择角色', trigger: 'change' },
   ],
 }))
@@ -72,11 +76,9 @@ watch(
       formData.username = props.initialData?.username ?? ''
       formData.email = props.initialData?.email ?? ''
       formData.password = ''
-      formData.role = props.initialData?.role ?? 'viewer'
+      formData.orgId = props.initialData?.orgId ?? ''
+      formData.roleCode = props.initialData?.roleCode ?? 'employee'
       formData.status = props.initialData?.status ?? 'active'
-      formData.tenantIds = props.initialData?.tenantIds
-        ? [...props.initialData.tenantIds]
-        : []
     }
   },
 )
@@ -136,15 +138,31 @@ async function handleSubmit(): Promise<void> {
           show-password
         />
       </el-form-item>
-      <el-form-item label="角色" prop="role">
+      <el-form-item label="所属组织" prop="orgId">
+        <el-tree-select
+          v-model="formData.orgId"
+          :data="orgTree"
+          node-key="id"
+          :props="{ label: 'name', children: 'children' }"
+          check-strictly
+          default-expand-all
+          :render-after-expand="false"
+          placeholder="请选择所属组织"
+          style="width: 100%"
+        />
+      </el-form-item>
+      <el-form-item label="角色" prop="roleCode">
         <el-select
-          v-model="formData.role"
+          v-model="formData.roleCode"
           placeholder="请选择角色"
           style="width: 100%"
         >
-          <el-option label="管理员 (admin)" value="admin" />
-          <el-option label="编辑者 (editor)" value="editor" />
-          <el-option label="观察者 (viewer)" value="viewer" />
+          <el-option
+            v-for="r in roleOptions"
+            :key="r.code"
+            :label="r.name"
+            :value="r.code"
+          />
         </el-select>
       </el-form-item>
       <el-form-item label="状态">
@@ -153,24 +171,6 @@ async function handleSubmit(): Promise<void> {
           <el-radio value="disabled">禁用</el-radio>
         </el-radio-group>
       </el-form-item>
-      <el-form-item label="可访问租户">
-        <el-select
-          v-model="formData.tenantIds"
-          multiple
-          collapse-tags
-          collapse-tags-tooltip
-          placeholder="选择该用户可访问的其它租户"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="t in tenantOptions"
-            :key="t.id"
-            :label="t.name"
-            :value="t.id"
-          />
-        </el-select>
-        <div class="form-tip">用户主租户 = 当前上下文租户；此处仅选择额外可访问的租户</div>
-      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="emit('cancel')">取消</el-button>
@@ -178,11 +178,3 @@ async function handleSubmit(): Promise<void> {
     </template>
   </el-dialog>
 </template>
-
-<style scoped>
-.form-tip {
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.6;
-}
-</style>

@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   HomeFilled,
   UserFilled,
   OfficeBuilding,
+  Share,
   SwitchButton,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { fetchTenants } from '@/api/tenants'
+import type { TenantBrief } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,8 +27,9 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { path: '/home', title: '首页', icon: HomeFilled },
-  { path: '/tenants', title: '租户管理', icon: OfficeBuilding, adminOnly: true },
+  { path: '/orgs', title: '组织管理', icon: Share },
   { path: '/users', title: '用户管理', icon: UserFilled },
+  { path: '/tenants', title: '租户管理', icon: OfficeBuilding, adminOnly: true },
 ]
 
 /** 根据角色过滤菜单：租户管理仅 admin 可见 */
@@ -65,11 +69,44 @@ async function handleLogout(): Promise<void> {
   router.push('/login')
 }
 
-/** 切换当前上下文租户 */
+// ---------- admin 租户工作区切换 ----------
+const adminTenants = ref<TenantBrief[]>([])
+const adminTenantsLoading = ref(false)
+
+async function loadAdminTenants(): Promise<void> {
+  if (!authStore.isAdmin) return
+  adminTenantsLoading.value = true
+  try {
+    const result = await fetchTenants({ page: 1, pageSize: 100 })
+    adminTenants.value = result.items.map((t) => ({ id: t.id, name: t.name }))
+    // 工作区未选择时默认第一个租户
+    if (!authStore.currentTenantId && adminTenants.value.length > 0) {
+      authStore.switchTenant(adminTenants.value[0].id)
+    }
+  } catch {
+    // 错误提示由拦截器统一处理
+  } finally {
+    adminTenantsLoading.value = false
+  }
+}
+
+/** 切换 admin 当前工作区租户 */
 function handleTenantSwitch(tenantId: string): void {
   authStore.switchTenant(tenantId)
-  ElMessage.success(`已切换到租户「${authStore.currentTenantName}」`)
+  const target = adminTenants.value.find((t) => t.id === tenantId)
+  ElMessage.success(`已切换到租户「${target?.name ?? tenantId}」`)
 }
+
+// admin 登录态就绪后加载租户列表
+watch(
+  () => authStore.isLoggedIn,
+  (loggedIn) => {
+    if (loggedIn) loadAdminTenants()
+  },
+)
+onMounted(() => {
+  if (authStore.isLoggedIn) loadAdminTenants()
+})
 </script>
 
 <template>
@@ -104,26 +141,31 @@ function handleTenantSwitch(tenantId: string): void {
         <div class="header-content">
           <span class="header-title">{{ route.meta.title || 'Oasis Curator' }}</span>
           <div class="header-right">
-            <!-- 租户切换器：可访问租户大于 1 个时显示，位于登录用户与登出按钮之前 -->
+            <!-- 租户切换器：仅平台 admin 可见，位于登录用户与登出按钮之前 -->
             <el-select
-              v-if="authStore.canSwitchTenant && showTenantContext"
+              v-if="authStore.isAdmin && showTenantContext"
               :model-value="authStore.currentTenantId"
               size="small"
               style="width: 150px"
+              :loading="adminTenantsLoading"
+              placeholder="选择租户"
               @change="handleTenantSwitch"
             >
               <el-option
-                v-for="t in authStore.accessibleTenants"
+                v-for="t in adminTenants"
                 :key="t.id"
                 :label="t.name"
                 :value="t.id"
               />
             </el-select>
             <span
-              v-else-if="authStore.currentTenantName && showTenantContext"
+              v-else-if="authStore.tenantName && showTenantContext"
               class="header-tenant"
             >
-              租户：{{ authStore.currentTenantName }}
+              租户：{{ authStore.tenantName }}
+            </span>
+            <span class="header-org" v-if="authStore.orgName && showTenantContext">
+              {{ authStore.orgName }}
             </span>
             <span class="header-user">{{ authStore.username }}</span>
             <el-button
@@ -211,6 +253,14 @@ function handleTenantSwitch(tenantId: string): void {
   color: #909399;
   padding: 2px 10px;
   background: #f0f2f5;
+  border-radius: 4px;
+}
+
+.header-org {
+  font-size: 13px;
+  color: #409eff;
+  padding: 2px 10px;
+  background: #ecf5ff;
   border-radius: 4px;
 }
 

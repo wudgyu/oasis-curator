@@ -3,16 +3,17 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { Plus, Search, RefreshLeft } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useAuthStore } from '@/stores/auth'
-import { fetchTenants } from '@/api/tenants'
-import type { User, UserFormData, UserRole, TenantBrief } from '@/types'
+import { fetchOrgTree } from '@/api/orgs'
+import { fetchRoles } from '@/api/roles'
+import type { User, UserFormData, RoleCode, OrgTreeNode, RoleOption } from '@/types'
 import UserTable from '@/components/UserTable.vue'
 import UserFormDialog from '@/components/UserFormDialog.vue'
 
 /**
- * 用户管理页面（对接 FastAPI 后端）
- * - 数据通过 Axios 从 /api/users 获取（服务端分页 + 上下文租户隔离）
- * - admin 可新增/编辑/删除；editor/viewer 只读
- * - 导航栏切换租户时自动刷新列表
+ * 用户管理页面（对接 FastAPI 后端，RBAC 数据范围）
+ * - 列表按当前用户角色的数据范围过滤（后端处理）
+ * - 写权限：admin（上下文租户全量）/ manager（本组织子树内）
+ * - admin 切换租户工作区时自动刷新
  */
 
 // ---------- Store ----------
@@ -21,14 +22,16 @@ const authStore = useAuthStore()
 
 // ---------- 筛选条件 ----------
 const filterUsername = ref('')
-const filterRole = ref<UserRole | ''>('')
+const filterRole = ref<RoleCode | ''>('')
 const filterStatus = ref('')
+const filterOrgId = ref('')
 
 function handleSearch(): void {
   userStore.setFilter({
     username: filterUsername.value,
     role: filterRole.value,
     status: filterStatus.value as User['status'] | '',
+    orgId: filterOrgId.value,
   })
 }
 
@@ -36,6 +39,7 @@ function handleReset(): void {
   filterUsername.value = ''
   filterRole.value = ''
   filterStatus.value = ''
+  filterOrgId.value = ''
   userStore.resetFilter()
 }
 
@@ -48,28 +52,48 @@ function handleSizeChange(size: number): void {
   userStore.setPageSize(size)
 }
 
+// ---------- 组织树与角色 ----------
+const orgTree = ref<OrgTreeNode[]>([])
+const roleOptions = ref<RoleOption[]>([])
+
+/** 管理器可选的组织树（限其子树）；admin 全树 */
+const scopedOrgTree = computed<OrgTreeNode[]>(() => {
+  if (authStore.isAdmin) return orgTree.value
+  if (authStore.roleCode === 'manager') {
+    return filterTreeByPath(orgTree.value, authStore.orgPath)
+  }
+  return []
+})
+
+function filterTreeByPath(nodes: OrgTreeNode[], prefix: string): OrgTreeNode[] {
+  const result: OrgTreeNode[] = []
+  for (const n of nodes) {
+    if (n.path.startsWith(prefix)) {
+      result.push({ ...n, children: filterTreeByPath(n.children, prefix) })
+    }
+  }
+  return result
+}
+
+async function loadOrgData(): Promise<void> {
+  try {
+    const [treeData, roles] = await Promise.all([fetchOrgTree(), fetchRoles()])
+    orgTree.value = treeData
+    roleOptions.value = roles
+  } catch {
+    // 错误提示由拦截器统一处理
+  }
+}
+
 // ---------- 对话框 ----------
 const dialogVisible = ref(false)
 const dialogIsEditing = ref(false)
 const editingUserId = ref('')
 const dialogInitialData = ref<UserFormData | undefined>(undefined)
 
-/** 全部租户列表（用于表单中的"可访问租户"多选） */
-const allTenants = ref<TenantBrief[]>([])
-const editingUserTenantId = ref('')
-
-/** 当前对话框的可选关联租户：排除用户主租户（新增时 = 上下文租户） */
-const dialogTenantOptions = computed(() => {
-  const excludeId = dialogIsEditing.value
-    ? editingUserTenantId.value
-    : authStore.currentTenantId
-  return allTenants.value.filter((t) => t.id !== excludeId)
-})
-
 function openAddDialog(): void {
   dialogIsEditing.value = false
   editingUserId.value = ''
-  editingUserTenantId.value = ''
   dialogInitialData.value = undefined
   dialogVisible.value = true
 }
@@ -77,14 +101,13 @@ function openAddDialog(): void {
 function openEditDialog(user: User): void {
   dialogIsEditing.value = true
   editingUserId.value = user.id
-  editingUserTenantId.value = user.tenantId
   dialogInitialData.value = {
     username: user.username,
     email: user.email,
     password: '',
-    role: user.role,
+    orgId: user.org.id,
+    roleCode: user.roleCode as UserFormData['roleCode'],
     status: user.status,
-    tenantIds: user.tenantIds ?? [],
   }
   dialogVisible.value = true
 }
@@ -106,17 +129,6 @@ async function handleDialogConfirm(data: UserFormData): Promise<void> {
     dialogVisible.value = false
   } catch {
     // 错误提示由 Axios 拦截器统一处理
-  }
-}
-
-/** 加载全部租户列表（仅 admin 表单需要） */
-async function loadAllTenants(): Promise<void> {
-  if (!authStore.isAdmin) return
-  try {
-    const result = await fetchTenants({ page: 1, pageSize: 100 })
-    allTenants.value = result.items.map((t) => ({ id: t.id, name: t.name }))
-  } catch {
-    // 加载失败不影响列表页使用
   }
 }
 
@@ -151,20 +163,20 @@ function handleDelete(user: User): void {
 onMounted(() => {
   // 进入页面时重置筛选，避免上次浏览的筛选条件残留导致列表与统计不一致
   userStore.resetFilter()
-  loadAllTenants()
+  loadOrgData()
 })
 
-// 导航栏切换租户后自动刷新当前租户的用户列表
-// 登出会清空 currentTenantId，此时不再发起请求（否则产生无凭证的 403 请求）
+// admin 切换租户工作区后自动刷新
 watch(
   () => authStore.currentTenantId,
   (newId) => {
     if (!authStore.isLoggedIn || !newId) return
-    // 同步清空页面筛选输入框
     filterUsername.value = ''
     filterRole.value = ''
     filterStatus.value = ''
+    filterOrgId.value = ''
     userStore.resetFilter()
+    loadOrgData()
   },
 )
 </script>
@@ -174,7 +186,7 @@ watch(
     <div class="page-header">
       <h1>用户管理</h1>
       <el-button
-        v-if="authStore.isAdmin"
+        v-if="authStore.canWrite"
         type="primary"
         :icon="Plus"
         @click="openAddDialog"
@@ -197,25 +209,41 @@ watch(
         v-model="filterRole"
         placeholder="按角色筛选"
         clearable
-        style="width: 140px"
+        style="width: 130px"
         @change="handleSearch"
         @clear="handleSearch"
       >
-        <el-option label="管理员" value="admin" />
-        <el-option label="编辑者" value="editor" />
-        <el-option label="观察者" value="viewer" />
+        <el-option
+          v-for="r in roleOptions"
+          :key="r.code"
+          :label="r.name"
+          :value="r.code"
+        />
       </el-select>
       <el-select
         v-model="filterStatus"
         placeholder="按状态筛选"
         clearable
-        style="width: 140px"
+        style="width: 130px"
         @change="handleSearch"
         @clear="handleSearch"
       >
         <el-option label="启用" value="active" />
         <el-option label="禁用" value="disabled" />
       </el-select>
+      <el-tree-select
+        v-model="filterOrgId"
+        :data="orgTree"
+        node-key="id"
+        :props="{ label: 'name', children: 'children' }"
+        check-strictly
+        default-expand-all
+        :render-after-expand="false"
+        placeholder="按组织筛选（含子树）"
+        clearable
+        style="width: 200px"
+        @change="handleSearch"
+      />
       <el-button type="primary" :icon="Search" @click="handleSearch">
         搜索
       </el-button>
@@ -226,7 +254,7 @@ watch(
     <UserTable
       :users="userStore.users"
       :loading="userStore.loading"
-      :show-actions="authStore.isAdmin"
+      :show-actions="authStore.canWrite"
       @edit="openEditDialog"
       @delete="handleDelete"
     />
@@ -250,7 +278,8 @@ watch(
       :visible="dialogVisible"
       :is-editing="dialogIsEditing"
       :initial-data="dialogInitialData"
-      :tenant-options="dialogTenantOptions"
+      :org-tree="scopedOrgTree"
+      :role-options="roleOptions"
       @confirm="handleDialogConfirm"
       @cancel="handleDialogCancel"
     />
