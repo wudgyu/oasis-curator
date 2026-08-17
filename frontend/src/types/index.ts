@@ -4,11 +4,12 @@ export type UserRole = 'admin' | 'editor' | 'viewer'
 /** 用户状态 */
 export type UserStatus = 'active' | 'disabled'
 
-/** 用户实体 */
+/** 用户实体（对接后端 /api/users） */
 export interface User {
   id: string
   username: string
   email: string
+  tenantId: string
   tenantName: string
   role: UserRole
   status: UserStatus
@@ -19,7 +20,8 @@ export interface User {
 export interface UserFormData {
   username: string
   email: string
-  tenantName: string
+  /** 新增时必填；编辑时留空表示不修改 */
+  password: string
   role: UserRole
   status: UserStatus
 }
@@ -28,7 +30,7 @@ export interface UserFormData {
 export interface UserFilter {
   username: string
   role: UserRole | ''
-  tenantName: string
+  status: UserStatus | ''
 }
 
 /** 分页参数 */
@@ -38,13 +40,22 @@ export interface Pagination {
   total: number
 }
 
+/** 服务端分页响应通用结构 */
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
 /** 租户套餐 */
 export type TenantPlan = 'basic' | 'pro' | 'enterprise'
 
 /** 租户状态 */
 export type TenantStatus = 'active' | 'disabled'
 
-/** 租户实体 */
+/** 租户实体（对接后端 /api/tenants） */
 export interface Tenant {
   id: string
   name: string
@@ -66,4 +77,15 @@ export interface TenantFilter {
   name: string
   plan: TenantPlan | ''
   status: TenantStatus | ''
+}
+
+/** 当前登录用户信息（/api/auth/me） */
+export interface UserInfo {
+  id: string
+  username: string
+  email: string
+  tenantId: string
+  tenantName: string
+  role: UserRole
+  status: UserStatus
 }

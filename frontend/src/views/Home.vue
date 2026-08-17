@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { UserFilled, OfficeBuilding, DataAnalysis } from '@element-plus/icons-vue'
-import { useUserStore } from '@/stores/user'
-import { useTenantStore } from '@/stores/tenant'
+import { useAuthStore } from '@/stores/auth'
+import { fetchUsers } from '@/api/users'
+import { fetchTenants } from '@/api/tenants'
 
 /**
  * 首页 / 仪表盘
- * 展示平台核心数据概览，后续对接后端 API 获取真实统计数据
+ * 通过后端 API 获取真实统计数据（page_size=1 仅取总数）
  */
 
-const userStore = useUserStore()
-const tenantStore = useTenantStore()
+const authStore = useAuthStore()
 
 interface StatCard {
   title: string
@@ -21,31 +21,57 @@ interface StatCard {
 }
 
 const stats = ref<StatCard[]>([])
+const statsLoading = ref(true)
 
-onMounted(() => {
-  stats.value = [
-    {
-      title: '租户数量',
-      value: tenantStore.tenants.length,
-      unit: '个',
-      icon: OfficeBuilding,
-      color: '#67C23A',
-    },
-    {
-      title: '用户总数',
-      value: userStore.users.length,
-      unit: '人',
-      icon: UserFilled,
-      color: '#409EFF',
-    },
-    {
-      title: '在线用户',
-      value: userStore.users.filter((u) => u.status === 'active').length,
-      unit: '人',
-      icon: DataAnalysis,
-      color: '#E6A23C',
-    },
-  ]
+const quickActions = computed(() => {
+  const actions = [{ path: '/users', label: '用户管理' }]
+  if (authStore.isAdmin) {
+    actions.unshift({ path: '/tenants', label: '租户管理' })
+  }
+  return actions
+})
+
+onMounted(async () => {
+  try {
+    // 并行获取统计数据
+    const [userTotal, activeUserTotal] = await Promise.all([
+      fetchUsers({ page: 1, pageSize: 1 }),
+      fetchUsers({ page: 1, pageSize: 1, status: 'active' }),
+    ])
+
+    const cards: StatCard[] = [
+      {
+        title: '用户总数',
+        value: userTotal.total,
+        unit: '人',
+        icon: UserFilled,
+        color: '#409EFF',
+      },
+      {
+        title: '启用用户',
+        value: activeUserTotal.total,
+        unit: '人',
+        icon: DataAnalysis,
+        color: '#E6A23C',
+      },
+    ]
+
+    // 租户统计仅 admin 可见
+    if (authStore.isAdmin) {
+      const tenantTotal = await fetchTenants({ page: 1, pageSize: 1 })
+      cards.unshift({
+        title: '租户数量',
+        value: tenantTotal.total,
+        unit: '个',
+        icon: OfficeBuilding,
+        color: '#67C23A',
+      })
+    }
+
+    stats.value = cards
+  } finally {
+    statsLoading.value = false
+  }
 })
 </script>
 
@@ -54,7 +80,7 @@ onMounted(() => {
     <h2>平台概览</h2>
 
     <!-- 统计卡片 -->
-    <div class="stats-grid">
+    <div class="stats-grid" v-loading="statsLoading">
       <el-card
         v-for="stat in stats"
         :key="stat.title"
@@ -84,11 +110,14 @@ onMounted(() => {
         <span>快速入口</span>
       </template>
       <div class="action-list">
-        <el-button type="primary" plain @click="$router.push('/tenants')">
-          租户管理
-        </el-button>
-        <el-button type="primary" plain @click="$router.push('/users')">
-          用户管理
+        <el-button
+          v-for="action in quickActions"
+          :key="action.path"
+          type="primary"
+          plain
+          @click="$router.push(action.path)"
+        >
+          {{ action.label }}
         </el-button>
       </div>
     </el-card>

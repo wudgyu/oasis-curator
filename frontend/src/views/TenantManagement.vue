@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, RefreshLeft } from '@element-plus/icons-vue'
 import { useTenantStore } from '@/stores/tenant'
 import type { Tenant, TenantFormData, TenantPlan, TenantStatus } from '@/types'
@@ -8,7 +7,9 @@ import TenantTable from '@/components/TenantTable.vue'
 import TenantFormDialog from '@/components/TenantFormDialog.vue'
 
 /**
- * 租户管理页面
+ * 租户管理页面（对接 FastAPI 后端）
+ * - 数据通过 Axios 从 /api/tenants 获取（服务端分页）
+ * - 仅 admin 角色可访问（路由守卫 + 后端 require_admin 双重校验）
  */
 
 // ---------- Store ----------
@@ -35,16 +36,11 @@ function handleReset(): void {
 }
 
 // ---------- 分页 ----------
-const currentPage = ref(1)
-const pageSize = ref(10)
-
 function handlePageChange(page: number): void {
-  currentPage.value = page
   tenantStore.setPage(page)
 }
 
 function handleSizeChange(size: number): void {
-  pageSize.value = size
   tenantStore.setPageSize(size)
 }
 
@@ -72,15 +68,19 @@ function openEditDialog(tenant: Tenant): void {
   dialogVisible.value = true
 }
 
-function handleDialogConfirm(data: TenantFormData): void {
-  if (dialogIsEditing.value) {
-    tenantStore.updateTenant(editingTenantId.value, data)
-    ElMessage.success('租户信息更新成功')
-  } else {
-    tenantStore.addTenant(data)
-    ElMessage.success('租户创建成功')
+async function handleDialogConfirm(data: TenantFormData): Promise<void> {
+  try {
+    if (dialogIsEditing.value) {
+      await tenantStore.editTenant(editingTenantId.value, data)
+      ElMessage.success('租户信息更新成功')
+    } else {
+      await tenantStore.addTenant(data)
+      ElMessage.success('租户创建成功')
+    }
+    dialogVisible.value = false
+  } catch {
+    // 错误提示由 Axios 拦截器统一处理
   }
-  dialogVisible.value = false
 }
 
 function handleDialogCancel(): void {
@@ -97,9 +97,13 @@ function handleDelete(tenant: Tenant): void {
       type: 'warning',
     },
   )
-    .then(() => {
-      tenantStore.deleteTenant(tenant.id)
-      ElMessage.success(`已删除租户「${tenant.name}」`)
+    .then(async () => {
+      try {
+        await tenantStore.removeTenant(tenant.id)
+        ElMessage.success(`已删除租户「${tenant.name}」`)
+      } catch {
+        // 错误提示由 Axios 拦截器统一处理
+      }
     })
     .catch(() => {
       // 用户取消删除
@@ -108,7 +112,7 @@ function handleDelete(tenant: Tenant): void {
 
 // ---------- 初始化 ----------
 onMounted(() => {
-  tenantStore.updatePaginationTotal()
+  tenantStore.fetchTenantList()
 })
 </script>
 
@@ -162,7 +166,8 @@ onMounted(() => {
 
     <!-- 租户表格 -->
     <TenantTable
-      :tenants="tenantStore.pagedTenants"
+      :tenants="tenantStore.tenants"
+      :loading="tenantStore.loading"
       @edit="openEditDialog"
       @delete="handleDelete"
     />
@@ -170,10 +175,10 @@ onMounted(() => {
     <!-- 分页 -->
     <div class="pagination-wrapper">
       <el-pagination
-        v-model:current-page="currentPage"
-        v-model:page-size="pageSize"
+        v-model:current-page="tenantStore.page"
+        v-model:page-size="tenantStore.pageSize"
         :page-sizes="[5, 10, 20, 50]"
-        :total="tenantStore.filteredTenants.length"
+        :total="tenantStore.total"
         layout="total, sizes, prev, pager, next, jumper"
         background
         @current-change="handlePageChange"

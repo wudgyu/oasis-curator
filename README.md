@@ -174,17 +174,33 @@ open http://localhost:5173
 ### 🛠️ 本地开发
 
 ```bash
-# 后端
+# 1. 后端（初始化种子数据 + 启动服务）
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python seed.py                      # 初始化测试数据（3 租户 + 5 用户）
 uvicorn app.main:app --reload
 
-# 前端（使用 pnpm）
+# 2. 前端（使用 pnpm，API 请求经 Vite 代理转发至 :8000）
 cd frontend
 pnpm install
 pnpm dev
 ```
+
+访问 `http://localhost:5173`，使用测试账号登录：
+
+| 账号 | 密码 | 角色 | 租户 |
+|------|------|------|------|
+| admin | admin123 | admin | 星辰科技 |
+| editor | editor123 | editor | 星辰科技 |
+| viewer | viewer123 | viewer | 星辰科技 |
+| cloud_admin | admin123 | admin | 云端数据 |
+
+> 🔐 **认证授权底座（已完成）**：本项目已完成阶段一 —— 统一认证授权基础设施，作为后续所有 AI 模块的底座：
+> - **JWT 认证**：登录签发 Token（含 `user_id`/`tenant_id`/`role`，24h 过期），接口通过 `Authorization: Bearer` 鉴权
+> - **RBAC 权限**：admin 可管理用户/租户；editor 可查看本租户用户；viewer 仅可见自己
+> - **多租户隔离**：用户列表自动按登录者所属租户过滤，跨租户操作返回 403
+> - **前后端联调**：Vue 3 前端已完全接入后端 API（登录态保持、401 自动跳转、按角色渲染 UI）
 
 ---
 
@@ -225,33 +241,33 @@ pnpm dev
 oasis-curator/
 ├── frontend/                  # Vue 3 前端（pnpm 管理）
 │   ├── src/
+│   │   ├── api/               # 类型化 API 层（auth / tenants / users）
+│   │   ├── components/        # AppLayout / UserTable / UserFormDialog / TenantTable / TenantFormDialog
 │   │   ├── views/
-│   │   │   ├── Login.vue
-│   │   │   ├── AdminPanel.vue          # 租户/用户管理
-│   │   │   ├── DocUpload.vue           # 文档上传
-│   │   │   ├── DocQA.vue               # 问答对话
-│   │   │   ├── DocAgent.vue            # 文档处理 Agent
-│   │   │   ├── IamConfigGenerator.vue  # IAM 配置生成器
-│   │   │   └── McpSettings.vue         # MCP 服务配置
-│   │   ├── stores/           # Pinia stores
-│   │   └── api/              # Axios 封装
-│   ├── .npmrc                # pnpm 配置（auto-install-peers、strict-peer-dependencies）
+│   │   │   ├── Login.vue              # 登录页（对接 /api/auth/login）
+│   │   │   ├── Home.vue               # 首页仪表盘（真实统计数据）
+│   │   │   ├── UserManagement.vue     # 用户管理（服务端分页 + 角色按钮控制）
+│   │   │   └── TenantManagement.vue   # 租户管理（仅 admin）
+│   │   ├── stores/           # Pinia stores（auth / user / tenant）
+│   │   ├── utils/request.ts  # Axios 拦截器（Token 注入 + 401 跳转 + 统一错误提示）
+│   │   ├── router/           # 路由 + 导航守卫（登录校验 + 角色校验）
+│   │   └── types/            # TypeScript 类型定义
 │   ├── package.json
 │   └── pnpm-lock.yaml
 │
 ├── backend/                   # FastAPI 后端
 │   ├── app/
-│   │   ├── core/             # 核心 AI 能力
-│   │   │   ├── llm_provider.py         # 多模型路由
-│   │   │   ├── rag_pipeline.py         # RAG 全链路
-│   │   │   ├── doc_agent.py            # 文档处理 Agent
-│   │   │   ├── qa_agent.py             # 质量保障 Agent
-│   │   │   ├── iam_config.py           # IAM 生成器
-│   │   │   └── mcp_server.py           # MCP 服务
 │   │   ├── api/              # 路由模块
-│   │   ├── models/           # SQLAlchemy 模型
-│   │   ├── schemas/          # Pydantic 模型
-│   │   └── main.py
+│   │   │   ├── auth.py               # 登录 / 登出 / 当前用户 + get_current_user 依赖
+│   │   │   ├── tenants.py            # 租户 CRUD（admin）
+│   │   │   └── users.py              # 用户 CRUD（租户隔离 + RBAC）
+│   │   ├── core/             # 核心模块
+│   │   │   ├── config.py             # pydantic-settings 配置
+│   │   │   └── security.py           # JWT 签发/校验 + bcrypt 密码哈希
+│   │   ├── models/           # SQLAlchemy 模型（tenants / users）
+│   │   ├── schemas/          # Pydantic 请求/响应模型
+│   │   └── main.py           # 应用入口（自动建表 + CORS）
+│   ├── seed.py               # 种子数据（3 租户 + 5 测试用户）
 │   └── requirements.txt
 │
 ├── scripts/
@@ -268,7 +284,7 @@ oasis-curator/
 
 ## 🗺️ 路线图
 
-- [ ] **v0.1** · 认证授权底座（多租户 + RBAC + JWT）
+- [x] **v0.1** · 认证授权底座（多租户 + RBAC + JWT）✅ 已完成
 - [ ] **v0.2** · LLM 多模型路由（DeepSeek / Kimi / Ark）
 - [ ] **v0.3** · IAM 配置生成器（自然语言 → 权限配置）
 - [ ] **v0.4** · RAG 文档问答（多租户隔离 + 引用溯源）

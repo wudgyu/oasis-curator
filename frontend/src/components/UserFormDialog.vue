@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, watch } from 'vue'
+import { ref, reactive, watch, computed } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import type { UserFormData } from '@/types'
 
@@ -7,6 +7,9 @@ import type { UserFormData } from '@/types'
  * 用户表单对话框组件
  * 展示 defineProps<T>() 和 defineEmits<T>() 的泛型用法，
  * 以及 watch 监听 props 变化以回填表单数据
+ *
+ * 新增时密码必填；编辑时密码留空表示不修改。
+ * 租户由后端根据当前登录用户自动归属，无需选择。
  */
 
 // ---------- Props ----------
@@ -17,8 +20,6 @@ const props = defineProps<{
   isEditing: boolean
   /** 表单初始数据（编辑时传入已有用户数据） */
   initialData?: UserFormData
-  /** 可选租户列表 */
-  tenantNames: string[]
 }>()
 
 // ---------- Emits ----------
@@ -35,12 +36,12 @@ const formRef = ref<FormInstance>()
 const formData = reactive<UserFormData>({
   username: '',
   email: '',
-  tenantName: '',
+  password: '',
   role: 'viewer',
   status: 'active',
 })
 
-const formRules: FormRules = {
+const formRules = computed<FormRules>(() => ({
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 2, max: 20, message: '用户名长度在 2 到 20 个字符', trigger: 'blur' },
@@ -49,13 +50,16 @@ const formRules: FormRules = {
     { required: true, message: '请输入邮箱', trigger: 'blur' },
     { type: 'email', message: '请输入正确的邮箱格式', trigger: 'blur' },
   ],
-  tenantName: [
-    { required: true, message: '请选择租户', trigger: 'change' },
-  ],
+  password: props.isEditing
+    ? [{ min: 6, max: 128, message: '密码长度在 6 到 128 个字符（留空不修改）', trigger: 'blur' }]
+    : [
+        { required: true, message: '请输入密码', trigger: 'blur' },
+        { min: 6, max: 128, message: '密码长度在 6 到 128 个字符', trigger: 'blur' },
+      ],
   role: [
     { required: true, message: '请选择角色', trigger: 'change' },
   ],
-}
+}))
 
 // 监听对话框打开，回填初始数据
 watch(
@@ -64,7 +68,7 @@ watch(
     if (newVal && props.initialData) {
       formData.username = props.initialData.username
       formData.email = props.initialData.email
-      formData.tenantName = props.initialData.tenantName
+      formData.password = ''
       formData.role = props.initialData.role
       formData.status = props.initialData.status
     }
@@ -118,19 +122,13 @@ async function handleSubmit(): Promise<void> {
           placeholder="请输入邮箱地址"
         />
       </el-form-item>
-      <el-form-item label="所属租户" prop="tenantName">
-        <el-select
-          v-model="formData.tenantName"
-          placeholder="请选择租户"
-          style="width: 100%"
-        >
-          <el-option
-            v-for="name in tenantNames"
-            :key="name"
-            :label="name"
-            :value="name"
-          />
-        </el-select>
+      <el-form-item label="密码" prop="password">
+        <el-input
+          v-model="formData.password"
+          type="password"
+          :placeholder="isEditing ? '留空表示不修改密码' : '请输入密码（至少 6 位）'"
+          show-password
+        />
       </el-form-item>
       <el-form-item label="角色" prop="role">
         <el-select

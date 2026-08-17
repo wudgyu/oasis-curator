@@ -7,8 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 
 /**
  * 登录页
- * 使用 Pinia authStore 管理登录状态
- * 后续 Day 12-13 对接 FastAPI 认证后端，替换 Mock 登录为真实 API 调用
+ * 调用 FastAPI 后端 /api/auth/login，成功后存储 token 并跳转首页
  */
 
 const router = useRouter()
@@ -41,22 +40,18 @@ async function handleLogin(): Promise<void> {
 
   try {
     await formRef.value.validate()
-    loading.value = true
+  } catch {
+    // 表单校验不通过，不发起请求
+    return
+  }
 
-    // 模拟登录延迟（后续对接 FastAPI 后端时替换为 API 调用）
-    await new Promise((resolve) => setTimeout(resolve, 800))
-
-    // Mock 登录：任意用户名密码均可登录
-    // 后续替换为：const res = await request.post('/auth/login', formData)
-    authStore.login(
-      'mock-jwt-token',
-      formData.username,
-      { id: 'tenant-001', name: '星辰科技' },
-    )
+  loading.value = true
+  try {
+    await authStore.login(formData.username, formData.password)
     ElMessage.success('登录成功')
     router.push('/home')
   } catch {
-    // 表单校验不通过
+    // 登录失败：错误提示由 Axios 拦截器统一处理
   } finally {
     loading.value = false
   }
@@ -105,7 +100,7 @@ async function handleLogin(): Promise<void> {
         </el-form-item>
       </el-form>
       <div class="login-footer">
-        <span>Mock 模式 — 任意用户名密码均可登录</span>
+        <span>测试账号：admin / admin123 · viewer / viewer123</span>
       </div>
     </div>
   </div>

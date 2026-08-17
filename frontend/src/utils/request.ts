@@ -11,13 +11,6 @@ import { useAuthStore } from '@/stores/auth'
  * - 401 处理 ≈ Spring Security 的 AuthenticationEntryPoint
  */
 
-/** 统一响应格式 */
-export interface ApiResponse<T = unknown> {
-  code: number
-  message: string
-  data: T
-}
-
 /** 创建 Axios 实例 */
 const instance: AxiosInstance = axios.create({
   baseURL: '/api',
@@ -30,8 +23,7 @@ const instance: AxiosInstance = axios.create({
 // ========== 请求拦截器 ==========
 instance.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // 从 Pinia Store 获取 token（而非直接读 localStorage）
-    // Pinia 在 setup 外使用需要特别注意：必须在 app.use(pinia) 之后调用
+    // 从 localStorage 读取 token（避免与 Pinia 循环依赖）
     const token = localStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -44,17 +36,30 @@ instance.interceptors.request.use(
 )
 
 // ========== 响应拦截器 ==========
+
+/** 从 FastAPI 错误响应中提取可读的错误信息 */
+function extractErrorMessage(error: AxiosError): string | null {
+  const data = error.response?.data as { detail?: unknown } | undefined
+  if (!data || data.detail === undefined) return null
+
+  const detail = data.detail
+  if (typeof detail === 'string') {
+    return detail
+  }
+
+  // 422 校验错误：detail 是数组 [{ loc, msg }]
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0] as { loc?: string[]; msg?: string }
+    const field = first.loc?.[first.loc.length - 1] ?? ''
+    const msg = first.msg ?? '参数校验失败'
+    return field ? `${field}: ${msg}` : msg
+  }
+
+  return null
+}
+
 instance.interceptors.response.use(
   (response) => {
-    // 后端统一返回 { code, message, data }
-    const res = response.data as ApiResponse
-
-    // 业务状态码非 200 视为异常
-    if (res.code !== undefined && res.code !== 200) {
-      ElMessage.error(res.message || '请求失败')
-      return Promise.reject(new Error(res.message || '请求失败'))
-    }
-
     return response
   },
   (error: AxiosError) => {
@@ -62,28 +67,40 @@ instance.interceptors.response.use(
 
     if (response) {
       const { status } = response
+      // 登录接口自身返回 401 = 密码错误，不走全局"登录过期"逻辑
+      const isLoginRequest = error.config?.url?.includes('/auth/login')
 
       switch (status) {
         case 401: {
-          // Token 过期或无效 → 清除登录态 → 跳转登录页
-          const authStore = useAuthStore()
-          authStore.logout()
-          ElMessage.error('登录已过期，请重新登录')
-          // 使用 window.location 避免循环依赖 router
-          window.location.hash = '#/login'
+          if (!isLoginRequest) {
+            // Token 过期或无效 → 清除登录态 → 跳转登录页
+            const authStore = useAuthStore()
+            authStore.clearAuthState()
+            ElMessage.error('登录已过期，请重新登录')
+            // 使用 window.location 避免循环依赖 router
+            window.location.hash = '#/login'
+          } else {
+            ElMessage.error(extractErrorMessage(error) ?? '用户名或密码错误')
+          }
           break
         }
         case 403:
-          ElMessage.error('没有操作权限')
+          ElMessage.error(extractErrorMessage(error) ?? '没有操作权限')
           break
         case 404:
-          ElMessage.error('请求的资源不存在')
+          ElMessage.error(extractErrorMessage(error) ?? '请求的资源不存在')
+          break
+        case 409:
+          ElMessage.error(extractErrorMessage(error) ?? '数据冲突')
+          break
+        case 422:
+          ElMessage.error(extractErrorMessage(error) ?? '参数校验失败')
           break
         case 500:
           ElMessage.error('服务器内部错误')
           break
         default:
-          ElMessage.error(`请求失败 (${status})`)
+          ElMessage.error(extractErrorMessage(error) ?? `请求失败 (${status})`)
       }
     } else if (error.code === 'ECONNABORTED') {
       ElMessage.error('请求超时，请稍后重试')

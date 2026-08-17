@@ -1,138 +1,115 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { User, UserFormData, UserFilter, Pagination } from '@/types'
-import { mockUsers, getTenantNames } from '@/mock/users'
+import { ref } from 'vue'
+import type { User, UserFormData, UserFilter } from '@/types'
+import { fetchUsers, createUser, updateUser, deleteUser } from '@/api/users'
 
+/**
+ * 用户管理 Store（服务端分页 + 筛选）
+ *
+ * 数据由 FastAPI 后端提供，筛选和分页在服务端完成。
+ * 租户隔离由后端根据 JWT 中的 tenant_id 自动处理。
+ */
 export const useUserStore = defineStore('user', () => {
   // ---------- 状态 ----------
-  const users = ref<User[]>(mockUsers)
+  /** 当前页用户数据 */
+  const users = ref<User[]>([])
+  /** 加载状态 */
+  const loading = ref(false)
+  /** 服务端返回的总条数 */
+  const total = ref(0)
   const filter = ref<UserFilter>({
     username: '',
     role: '',
-    tenantName: '',
+    status: '',
   })
-  const pagination = ref<Pagination>({
-    page: 1,
-    pageSize: 10,
-    total: mockUsers.length,
-  })
-
-  // ---------- 计算属性 ----------
-  /** 根据筛选条件过滤后的用户列表 */
-  const filteredUsers = computed<User[]>(() => {
-    let result = users.value
-
-    if (filter.value.username) {
-      const keyword = filter.value.username.toLowerCase()
-      result = result.filter((u) =>
-        u.username.toLowerCase().includes(keyword),
-      )
-    }
-
-    if (filter.value.role) {
-      result = result.filter((u) => u.role === filter.value.role)
-    }
-
-    if (filter.value.tenantName) {
-      result = result.filter((u) => u.tenantName === filter.value.tenantName)
-    }
-
-    return result
-  })
-
-  /** 当前页的用户数据 */
-  const pagedUsers = computed<User[]>(() => {
-    const start = (pagination.value.page - 1) * pagination.value.pageSize
-    const end = start + pagination.value.pageSize
-    return filteredUsers.value.slice(start, end)
-  })
-
-  /** 筛选条件变化时重置分页 */
-  function updatePaginationTotal(): void {
-    pagination.value.total = filteredUsers.value.length
-    // 如果当前页超出范围，回到第一页
-    const maxPage = Math.max(
-      1,
-      Math.ceil(pagination.value.total / pagination.value.pageSize),
-    )
-    if (pagination.value.page > maxPage) {
-      pagination.value.page = 1
-    }
-  }
+  const page = ref(1)
+  const pageSize = ref(10)
 
   // ---------- 方法 ----------
-  /** 更新筛选条件 */
+  /** 从服务端拉取当前筛选条件下的用户列表 */
+  async function fetchUserList(): Promise<void> {
+    loading.value = true
+    try {
+      const result = await fetchUsers({
+        page: page.value,
+        pageSize: pageSize.value,
+        username: filter.value.username || undefined,
+        role: filter.value.role || undefined,
+        status: filter.value.status || undefined,
+      })
+      users.value = result.items
+      total.value = result.total
+      // 删除最后一条后可能超出页数范围，回退到最后一页
+      if (result.items.length === 0 && page.value > 1 && result.totalPages > 0) {
+        page.value = result.totalPages
+        await fetchUserList()
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 更新筛选条件并重新查询 */
   function setFilter(partial: Partial<UserFilter>): void {
     filter.value = { ...filter.value, ...partial }
-    pagination.value.page = 1
-    updatePaginationTotal()
+    page.value = 1
+    fetchUserList()
   }
 
-  /** 重置筛选条件 */
+  /** 重置筛选条件并重新查询 */
   function resetFilter(): void {
-    filter.value = { username: '', role: '', tenantName: '' }
-    pagination.value.page = 1
-    updatePaginationTotal()
+    filter.value = { username: '', role: '', status: '' }
+    page.value = 1
+    fetchUserList()
   }
 
-  /** 设置当前页 */
-  function setPage(page: number): void {
-    pagination.value.page = page
+  /** 切换页码 */
+  function setPage(newPage: number): void {
+    page.value = newPage
+    fetchUserList()
   }
 
-  /** 设置每页条数 */
+  /** 切换每页条数 */
   function setPageSize(size: number): void {
-    pagination.value.pageSize = size
-    pagination.value.page = 1
-    updatePaginationTotal()
+    pageSize.value = size
+    page.value = 1
+    fetchUserList()
   }
 
-  /** 新增用户 */
-  function addUser(formData: UserFormData): void {
-    const newUser: User = {
-      id: String(Date.now()),
-      ...formData,
-      createdAt: new Date().toISOString().replace('T', ' ').slice(0, 19),
-    }
-    users.value.unshift(newUser)
-    updatePaginationTotal()
+  /** 新增用户（成功后刷新列表） */
+  async function addUser(formData: UserFormData): Promise<void> {
+    await createUser(formData)
+    await fetchUserList()
   }
 
-  /** 编辑用户 */
-  function updateUser(id: string, formData: UserFormData): void {
-    const index = users.value.findIndex((u) => u.id === id)
-    if (index !== -1) {
-      users.value[index] = { ...users.value[index], ...formData }
-    }
+  /** 编辑用户（成功后刷新列表） */
+  async function editUser(id: string, formData: Partial<UserFormData>): Promise<void> {
+    await updateUser(id, formData)
+    await fetchUserList()
   }
 
-  /** 删除用户 */
-  function deleteUser(id: string): void {
-    users.value = users.value.filter((u) => u.id !== id)
-    updatePaginationTotal()
+  /** 删除用户（成功后刷新列表） */
+  async function removeUser(id: string): Promise<void> {
+    await deleteUser(id)
+    await fetchUserList()
   }
 
   return {
     // 状态
     users,
+    loading,
+    total,
     filter,
-    pagination,
-    // 计算属性
-    filteredUsers,
-    pagedUsers,
+    page,
+    pageSize,
     // 方法
+    fetchUserList,
     setFilter,
     resetFilter,
     setPage,
     setPageSize,
     addUser,
-    updateUser,
-    deleteUser,
-    updatePaginationTotal,
+    editUser,
+    removeUser,
   }
 })
-
-/** 获取租户列表 */
-export function useTenantNames(): string[] {
-  return getTenantNames()
-}

@@ -1,137 +1,115 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import type { Tenant, TenantFormData, TenantFilter, Pagination } from '@/types'
-import { mockTenants } from '@/mock/tenants'
+import { ref } from 'vue'
+import type { Tenant, TenantFormData, TenantFilter } from '@/types'
+import { fetchTenants, createTenant, updateTenant, deleteTenant } from '@/api/tenants'
 
+/**
+ * 租户管理 Store（服务端分页 + 筛选）
+ *
+ * 数据由 FastAPI 后端提供，筛选和分页在服务端完成。
+ * 仅 admin 角色可访问（后端校验 + 前端路由守卫双重保障）。
+ */
 export const useTenantStore = defineStore('tenant', () => {
   // ---------- 状态 ----------
-  const tenants = ref<Tenant[]>(mockTenants)
+  /** 当前页租户数据 */
+  const tenants = ref<Tenant[]>([])
+  /** 加载状态 */
+  const loading = ref(false)
+  /** 服务端返回的总条数 */
+  const total = ref(0)
   const filter = ref<TenantFilter>({
     name: '',
     plan: '',
     status: '',
   })
-  const pagination = ref<Pagination>({
-    page: 1,
-    pageSize: 10,
-    total: mockTenants.length,
-  })
-
-  // ---------- 计算属性 ----------
-  /** 根据筛选条件过滤后的租户列表 */
-  const filteredTenants = computed<Tenant[]>(() => {
-    let result = tenants.value
-
-    if (filter.value.name) {
-      const keyword = filter.value.name.toLowerCase()
-      result = result.filter((t) => t.name.toLowerCase().includes(keyword))
-    }
-
-    if (filter.value.plan) {
-      result = result.filter((t) => t.plan === filter.value.plan)
-    }
-
-    if (filter.value.status) {
-      result = result.filter((t) => t.status === filter.value.status)
-    }
-
-    return result
-  })
-
-  /** 当前页的租户数据 */
-  const pagedTenants = computed<Tenant[]>(() => {
-    const start = (pagination.value.page - 1) * pagination.value.pageSize
-    const end = start + pagination.value.pageSize
-    return filteredTenants.value.slice(start, end)
-  })
-
-  /** 筛选条件变化时重置分页 */
-  function updatePaginationTotal(): void {
-    pagination.value.total = filteredTenants.value.length
-    const maxPage = Math.max(
-      1,
-      Math.ceil(pagination.value.total / pagination.value.pageSize),
-    )
-    if (pagination.value.page > maxPage) {
-      pagination.value.page = 1
-    }
-  }
+  const page = ref(1)
+  const pageSize = ref(10)
 
   // ---------- 方法 ----------
-  /** 更新筛选条件 */
+  /** 从服务端拉取当前筛选条件下的租户列表 */
+  async function fetchTenantList(): Promise<void> {
+    loading.value = true
+    try {
+      const result = await fetchTenants({
+        page: page.value,
+        pageSize: pageSize.value,
+        name: filter.value.name || undefined,
+        plan: filter.value.plan || undefined,
+        status: filter.value.status || undefined,
+      })
+      tenants.value = result.items
+      total.value = result.total
+      // 删除最后一条后可能超出页数范围，回退到最后一页
+      if (result.items.length === 0 && page.value > 1 && result.totalPages > 0) {
+        page.value = result.totalPages
+        await fetchTenantList()
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 更新筛选条件并重新查询 */
   function setFilter(partial: Partial<TenantFilter>): void {
     filter.value = { ...filter.value, ...partial }
-    pagination.value.page = 1
-    updatePaginationTotal()
+    page.value = 1
+    fetchTenantList()
   }
 
-  /** 重置筛选条件 */
+  /** 重置筛选条件并重新查询 */
   function resetFilter(): void {
     filter.value = { name: '', plan: '', status: '' }
-    pagination.value.page = 1
-    updatePaginationTotal()
+    page.value = 1
+    fetchTenantList()
   }
 
-  /** 设置当前页 */
-  function setPage(page: number): void {
-    pagination.value.page = page
+  /** 切换页码 */
+  function setPage(newPage: number): void {
+    page.value = newPage
+    fetchTenantList()
   }
 
-  /** 设置每页条数 */
+  /** 切换每页条数 */
   function setPageSize(size: number): void {
-    pagination.value.pageSize = size
-    pagination.value.page = 1
-    updatePaginationTotal()
+    pageSize.value = size
+    page.value = 1
+    fetchTenantList()
   }
 
-  /** 新增租户 */
-  function addTenant(formData: TenantFormData): void {
-    const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
-    const newTenant: Tenant = {
-      id: `tenant-${Date.now()}`,
-      ...formData,
-      createdAt: now,
-      updatedAt: now,
-    }
-    tenants.value.unshift(newTenant)
-    updatePaginationTotal()
+  /** 新增租户（成功后刷新列表） */
+  async function addTenant(formData: TenantFormData): Promise<void> {
+    await createTenant(formData)
+    await fetchTenantList()
   }
 
-  /** 编辑租户 */
-  function updateTenant(id: string, formData: TenantFormData): void {
-    const index = tenants.value.findIndex((t) => t.id === id)
-    if (index !== -1) {
-      const now = new Date().toISOString().replace('T', ' ').slice(0, 19)
-      tenants.value[index] = {
-        ...tenants.value[index],
-        ...formData,
-        updatedAt: now,
-      }
-    }
+  /** 编辑租户（成功后刷新列表） */
+  async function editTenant(id: string, formData: TenantFormData): Promise<void> {
+    await updateTenant(id, formData)
+    await fetchTenantList()
   }
 
-  /** 删除租户 */
-  function deleteTenant(id: string): void {
-    tenants.value = tenants.value.filter((t) => t.id !== id)
-    updatePaginationTotal()
+  /** 删除租户（成功后刷新列表） */
+  async function removeTenant(id: string): Promise<void> {
+    await deleteTenant(id)
+    await fetchTenantList()
   }
 
   return {
     // 状态
     tenants,
+    loading,
+    total,
     filter,
-    pagination,
-    // 计算属性
-    filteredTenants,
-    pagedTenants,
+    page,
+    pageSize,
     // 方法
+    fetchTenantList,
     setFilter,
     resetFilter,
     setPage,
     setPageSize,
     addTenant,
-    updateTenant,
-    deleteTenant,
-    updatePaginationTotal,
+    editTenant,
+    removeTenant,
   }
 })

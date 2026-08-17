@@ -18,13 +18,20 @@ interface MenuItem {
   path: string
   title: string
   icon: typeof HomeFilled
+  /** 仅 admin 可见 */
+  adminOnly?: boolean
 }
 
 const menuItems: MenuItem[] = [
   { path: '/home', title: '首页', icon: HomeFilled },
-  { path: '/tenants', title: '租户管理', icon: OfficeBuilding },
+  { path: '/tenants', title: '租户管理', icon: OfficeBuilding, adminOnly: true },
   { path: '/users', title: '用户管理', icon: UserFilled },
 ]
+
+/** 根据角色过滤菜单：租户管理仅 admin 可见 */
+const visibleMenus = computed(() =>
+  menuItems.filter((item) => !item.adminOnly || authStore.isAdmin),
+)
 
 const activeMenu = computed(() => route.path)
 
@@ -32,23 +39,24 @@ function handleMenuSelect(path: string): void {
   router.push(path)
 }
 
-function handleLogout(): void {
-  ElMessageBox.confirm(
-    '确定要退出登录吗？',
-    '退出确认',
-    {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
-    },
-  )
-    .then(() => {
-      authStore.logout()
-      router.push('/login')
-    })
-    .catch(() => {
-      // 取消退出
-    })
+async function handleLogout(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '确定要退出登录吗？',
+      '退出确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    // 取消退出
+    return
+  }
+
+  await authStore.logout()
+  router.push('/login')
 }
 </script>
 
@@ -68,7 +76,7 @@ function handleLogout(): void {
         @select="handleMenuSelect"
       >
         <el-menu-item
-          v-for="item in menuItems"
+          v-for="item in visibleMenus"
           :key="item.path"
           :index="item.path"
         >

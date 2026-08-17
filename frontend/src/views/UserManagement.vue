@@ -1,52 +1,48 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Plus, Search, RefreshLeft } from '@element-plus/icons-vue'
-import { useUserStore, useTenantNames } from '@/stores/user'
+import { useUserStore } from '@/stores/user'
+import { useAuthStore } from '@/stores/auth'
 import type { User, UserFormData, UserRole } from '@/types'
 import UserTable from '@/components/UserTable.vue'
 import UserFormDialog from '@/components/UserFormDialog.vue'
 
 /**
- * 用户管理页面
- * 使用提取的 UserTable 和 UserFormDialog 组件，
- * 通过 defineProps<T> / defineEmits<T> 进行组件通信
+ * 用户管理页面（对接 FastAPI 后端）
+ * - 数据通过 Axios 从 /api/users 获取（服务端分页 + 租户隔离）
+ * - admin 可新增/编辑/删除；editor/viewer 只读
  */
 
 // ---------- Store ----------
 const userStore = useUserStore()
-const tenantNames = useTenantNames()
+const authStore = useAuthStore()
 
 // ---------- 筛选条件 ----------
 const filterUsername = ref('')
 const filterRole = ref<UserRole | ''>('')
-const filterTenant = ref('')
+const filterStatus = ref('')
 
 function handleSearch(): void {
   userStore.setFilter({
     username: filterUsername.value,
     role: filterRole.value,
-    tenantName: filterTenant.value,
+    status: filterStatus.value as User['status'] | '',
   })
 }
 
 function handleReset(): void {
   filterUsername.value = ''
   filterRole.value = ''
-  filterTenant.value = ''
+  filterStatus.value = ''
   userStore.resetFilter()
 }
 
 // ---------- 分页 ----------
-const currentPage = ref(1)
-const pageSize = ref(10)
-
 function handlePageChange(page: number): void {
-  currentPage.value = page
   userStore.setPage(page)
 }
 
 function handleSizeChange(size: number): void {
-  pageSize.value = size
   userStore.setPageSize(size)
 }
 
@@ -69,22 +65,31 @@ function openEditDialog(user: User): void {
   dialogInitialData.value = {
     username: user.username,
     email: user.email,
-    tenantName: user.tenantName,
+    password: '',
     role: user.role,
     status: user.status,
   }
   dialogVisible.value = true
 }
 
-function handleDialogConfirm(data: UserFormData): void {
-  if (dialogIsEditing.value) {
-    userStore.updateUser(editingUserId.value, data)
-    ElMessage.success('用户信息更新成功')
-  } else {
-    userStore.addUser(data)
-    ElMessage.success('用户创建成功')
+async function handleDialogConfirm(data: UserFormData): Promise<void> {
+  try {
+    if (dialogIsEditing.value) {
+      // 编辑时密码留空表示不修改
+      const payload: Partial<UserFormData> = { ...data }
+      if (!payload.password) {
+        delete payload.password
+      }
+      await userStore.editUser(editingUserId.value, payload)
+      ElMessage.success('用户信息更新成功')
+    } else {
+      await userStore.addUser(data)
+      ElMessage.success('用户创建成功')
+    }
+    dialogVisible.value = false
+  } catch {
+    // 错误提示由 Axios 拦截器统一处理
   }
-  dialogVisible.value = false
 }
 
 function handleDialogCancel(): void {
@@ -101,9 +106,13 @@ function handleDelete(user: User): void {
       type: 'warning',
     },
   )
-    .then(() => {
-      userStore.deleteUser(user.id)
-      ElMessage.success(`已删除用户「${user.username}」`)
+    .then(async () => {
+      try {
+        await userStore.removeUser(user.id)
+        ElMessage.success(`已删除用户「${user.username}」`)
+      } catch {
+        // 错误提示由 Axios 拦截器统一处理
+      }
     })
     .catch(() => {
       // 用户取消删除
@@ -112,7 +121,7 @@ function handleDelete(user: User): void {
 
 // ---------- 初始化 ----------
 onMounted(() => {
-  userStore.updatePaginationTotal()
+  userStore.fetchUserList()
 })
 </script>
 
@@ -120,7 +129,12 @@ onMounted(() => {
   <div class="user-management">
     <div class="page-header">
       <h1>用户管理</h1>
-      <el-button type="primary" :icon="Plus" @click="openAddDialog">
+      <el-button
+        v-if="authStore.isAdmin"
+        type="primary"
+        :icon="Plus"
+        @click="openAddDialog"
+      >
         新增用户
       </el-button>
     </div>
@@ -148,19 +162,15 @@ onMounted(() => {
         <el-option label="观察者" value="viewer" />
       </el-select>
       <el-select
-        v-model="filterTenant"
-        placeholder="按租户筛选"
+        v-model="filterStatus"
+        placeholder="按状态筛选"
         clearable
-        style="width: 160px"
+        style="width: 140px"
         @change="handleSearch"
         @clear="handleSearch"
       >
-        <el-option
-          v-for="name in tenantNames"
-          :key="name"
-          :label="name"
-          :value="name"
-        />
+        <el-option label="启用" value="active" />
+        <el-option label="禁用" value="disabled" />
       </el-select>
       <el-button type="primary" :icon="Search" @click="handleSearch">
         搜索
@@ -170,7 +180,9 @@ onMounted(() => {
 
     <!-- 用户表格（提取的组件，使用 defineProps / defineEmits） -->
     <UserTable
-      :users="userStore.pagedUsers"
+      :users="userStore.users"
+      :loading="userStore.loading"
+      :show-actions="authStore.isAdmin"
       @edit="openEditDialog"
       @delete="handleDelete"
     />
@@ -178,10 +190,10 @@ onMounted(() => {
     <!-- 分页 -->
     <div class="pagination-wrapper">
       <el-pagination
-        v-model:current-page="currentPage"
-        v-model:page-size="pageSize"
+        v-model:current-page="userStore.page"
+        v-model:page-size="userStore.pageSize"
         :page-sizes="[5, 10, 20, 50]"
-        :total="userStore.filteredUsers.length"
+        :total="userStore.total"
         layout="total, sizes, prev, pager, next, jumper"
         background
         @current-change="handlePageChange"
@@ -194,7 +206,6 @@ onMounted(() => {
       :visible="dialogVisible"
       :is-editing="dialogIsEditing"
       :initial-data="dialogInitialData"
-      :tenant-names="tenantNames"
       @confirm="handleDialogConfirm"
       @cancel="handleDialogCancel"
     />

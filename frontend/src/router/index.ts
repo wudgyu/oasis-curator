@@ -36,7 +36,7 @@ const routes: RouteRecordRaw[] = [
         path: 'tenants',
         name: 'TenantManagement',
         component: () => import('@/views/TenantManagement.vue'),
-        meta: { title: '租户管理' },
+        meta: { title: '租户管理', requiresAdmin: true },
       },
     ],
   },
@@ -73,6 +73,12 @@ router.beforeEach(
     // 未登录 → 重定向到登录页
     if (!authStore.isLoggedIn) {
       next('/login')
+      return
+    }
+
+    // 角色权限校验：requiresAdmin 路由仅 admin 可访问
+    if (to.meta.requiresAdmin && !authStore.isAdmin) {
+      next('/home')
       return
     }
 

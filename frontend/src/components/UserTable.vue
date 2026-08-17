@@ -7,12 +7,16 @@ import type { User, UserRole, UserStatus } from '@/types'
  */
 
 // ---------- Props ----------
-defineProps<{
+const props = withDefaults(defineProps<{
   /** 用户数据列表 */
   users: User[]
   /** 是否加载中 */
   loading?: boolean
-}>()
+  /** 是否显示操作列（非 admin 角色隐藏编辑/删除按钮） */
+  showActions?: boolean
+}>(), {
+  showActions: true,
+})
 
 // ---------- Emits ----------
 const emit = defineEmits<{
@@ -76,7 +80,7 @@ function getStatusLabel(status: UserStatus): string {
       </template>
     </el-table-column>
     <el-table-column prop="createdAt" label="创建时间" width="180" />
-    <el-table-column label="操作" width="160" fixed="right">
+    <el-table-column v-if="props.showActions" label="操作" width="160" fixed="right">
       <template #default="{ row }">
         <el-button type="primary" link size="small" @click="emit('edit', (row as User))">
           编辑
