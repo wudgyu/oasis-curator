@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
-import type { UserFormData } from '@/types'
+import type { UserFormData, TenantBrief } from '@/types'
 
 /**
  * 用户表单对话框组件
@@ -9,7 +9,7 @@ import type { UserFormData } from '@/types'
  * 以及 watch 监听 props 变化以回填表单数据
  *
  * 新增时密码必填；编辑时密码留空表示不修改。
- * 租户由后端根据当前登录用户自动归属，无需选择。
+ * 用户主租户由上下文租户决定；tenantIds 指定可访问的其它租户。
  */
 
 // ---------- Props ----------
@@ -20,6 +20,8 @@ const props = defineProps<{
   isEditing: boolean
   /** 表单初始数据（编辑时传入已有用户数据） */
   initialData?: UserFormData
+  /** 可选的关联租户列表（已排除用户主租户） */
+  tenantOptions?: TenantBrief[]
 }>()
 
 // ---------- Emits ----------
@@ -39,6 +41,7 @@ const formData = reactive<UserFormData>({
   password: '',
   role: 'viewer',
   status: 'active',
+  tenantIds: [],
 })
 
 const formRules = computed<FormRules>(() => ({
@@ -65,12 +68,15 @@ const formRules = computed<FormRules>(() => ({
 watch(
   () => props.visible,
   (newVal) => {
-    if (newVal && props.initialData) {
-      formData.username = props.initialData.username
-      formData.email = props.initialData.email
+    if (newVal) {
+      formData.username = props.initialData?.username ?? ''
+      formData.email = props.initialData?.email ?? ''
       formData.password = ''
-      formData.role = props.initialData.role
-      formData.status = props.initialData.status
+      formData.role = props.initialData?.role ?? 'viewer'
+      formData.status = props.initialData?.status ?? 'active'
+      formData.tenantIds = props.initialData?.tenantIds
+        ? [...props.initialData.tenantIds]
+        : []
     }
   },
 )
@@ -147,6 +153,24 @@ async function handleSubmit(): Promise<void> {
           <el-radio value="disabled">禁用</el-radio>
         </el-radio-group>
       </el-form-item>
+      <el-form-item label="可访问租户">
+        <el-select
+          v-model="formData.tenantIds"
+          multiple
+          collapse-tags
+          collapse-tags-tooltip
+          placeholder="选择该用户可访问的其它租户"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="t in tenantOptions"
+            :key="t.id"
+            :label="t.name"
+            :value="t.id"
+          />
+        </el-select>
+        <div class="form-tip">用户主租户 = 当前上下文租户；此处仅选择额外可访问的租户</div>
+      </el-form-item>
     </el-form>
     <template #footer>
       <el-button @click="emit('cancel')">取消</el-button>
@@ -154,3 +178,11 @@ async function handleSubmit(): Promise<void> {
     </template>
   </el-dialog>
 </template>
+
+<style scoped>
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
+}
+</style>

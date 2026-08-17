@@ -112,7 +112,8 @@ function handleDelete(tenant: Tenant): void {
 
 // ---------- 初始化 ----------
 onMounted(() => {
-  tenantStore.fetchTenantList()
+  // 进入页面时重置筛选，避免上次浏览的筛选条件残留
+  tenantStore.resetFilter()
 })
 </script>
 

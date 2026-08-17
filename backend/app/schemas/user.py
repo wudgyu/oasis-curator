@@ -6,7 +6,7 @@
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -18,6 +18,8 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=6, max_length=128, description="密码")
     role: str = Field(default="viewer", pattern="^(admin|editor|viewer)$", description="角色")
     status: str = Field(default="active", pattern="^(active|disabled)$", description="状态")
+    # 可访问的其它租户 ID（主租户 = 创建时的上下文租户）
+    tenant_ids: Optional[List[str]] = Field(None, description="可访问的其它租户 ID 列表")
 
 
 class UserUpdate(BaseModel):
@@ -27,6 +29,8 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=6, max_length=128, description="密码")
     role: Optional[str] = Field(None, pattern="^(admin|editor|viewer)$", description="角色")
     status: Optional[str] = Field(None, pattern="^(active|disabled)$", description="状态")
+    # 可访问的其它租户 ID 列表（提交时整体替换）
+    tenant_ids: Optional[List[str]] = Field(None, description="可访问的其它租户 ID 列表")
 
 
 class UserResponse(BaseModel):
@@ -40,6 +44,8 @@ class UserResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    # 可访问的其它租户 ID（不含主租户）
+    tenant_ids: List[str] = []
 
     class Config:
         from_attributes = True

@@ -23,10 +23,15 @@ const instance: AxiosInstance = axios.create({
 // ========== 请求拦截器 ==========
 instance.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // 从 localStorage 读取 token（避免与 Pinia 循环依赖）
+    // 从 localStorage 读取（避免与 Pinia 循环依赖）
     const token = localStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
+    }
+    // 上下文租户：切换器选择的当前租户（后端按此做数据隔离）
+    const currentTenantId = localStorage.getItem('currentTenantId')
+    if (currentTenantId) {
+      config.headers['X-Tenant-Id'] = currentTenantId
     }
     return config
   },

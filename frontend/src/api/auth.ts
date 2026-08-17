@@ -19,6 +19,7 @@ interface RawUserInfo {
   tenant_name: string
   role: UserInfo['role']
   status: UserInfo['status']
+  tenants: { id: string; name: string }[]
 }
 
 /** 将后端 snake_case 字段映射为前端 camelCase */
@@ -31,6 +32,7 @@ function mapUserInfo(raw: RawUserInfo): UserInfo {
     tenantName: raw.tenant_name,
     role: raw.role,
     status: raw.status,
+    accessibleTenants: raw.tenants.map((t) => ({ id: t.id, name: t.name })),
   }
 }
 
@@ -49,7 +51,7 @@ export async function logout(): Promise<void> {
   }
 }
 
-/** 获取当前用户信息 */
+/** 获取当前用户信息（含可访问租户列表） */
 export async function getMe(): Promise<UserInfo> {
   const { data } = await request.get<RawUserInfo>('/auth/me')
   return mapUserInfo(data)

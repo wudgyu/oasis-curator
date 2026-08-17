@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { Plus, Search, RefreshLeft } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useAuthStore } from '@/stores/auth'
-import type { User, UserFormData, UserRole } from '@/types'
+import { fetchTenants } from '@/api/tenants'
+import type { User, UserFormData, UserRole, TenantBrief } from '@/types'
 import UserTable from '@/components/UserTable.vue'
 import UserFormDialog from '@/components/UserFormDialog.vue'
 
 /**
  * 用户管理页面（对接 FastAPI 后端）
- * - 数据通过 Axios 从 /api/users 获取（服务端分页 + 租户隔离）
+ * - 数据通过 Axios 从 /api/users 获取（服务端分页 + 上下文租户隔离）
  * - admin 可新增/编辑/删除；editor/viewer 只读
+ * - 导航栏切换租户时自动刷新列表
  */
 
 // ---------- Store ----------
@@ -52,9 +54,22 @@ const dialogIsEditing = ref(false)
 const editingUserId = ref('')
 const dialogInitialData = ref<UserFormData | undefined>(undefined)
 
+/** 全部租户列表（用于表单中的"可访问租户"多选） */
+const allTenants = ref<TenantBrief[]>([])
+const editingUserTenantId = ref('')
+
+/** 当前对话框的可选关联租户：排除用户主租户（新增时 = 上下文租户） */
+const dialogTenantOptions = computed(() => {
+  const excludeId = dialogIsEditing.value
+    ? editingUserTenantId.value
+    : authStore.currentTenantId
+  return allTenants.value.filter((t) => t.id !== excludeId)
+})
+
 function openAddDialog(): void {
   dialogIsEditing.value = false
   editingUserId.value = ''
+  editingUserTenantId.value = ''
   dialogInitialData.value = undefined
   dialogVisible.value = true
 }
@@ -62,12 +77,14 @@ function openAddDialog(): void {
 function openEditDialog(user: User): void {
   dialogIsEditing.value = true
   editingUserId.value = user.id
+  editingUserTenantId.value = user.tenantId
   dialogInitialData.value = {
     username: user.username,
     email: user.email,
     password: '',
     role: user.role,
     status: user.status,
+    tenantIds: user.tenantIds ?? [],
   }
   dialogVisible.value = true
 }
@@ -89,6 +106,17 @@ async function handleDialogConfirm(data: UserFormData): Promise<void> {
     dialogVisible.value = false
   } catch {
     // 错误提示由 Axios 拦截器统一处理
+  }
+}
+
+/** 加载全部租户列表（仅 admin 表单需要） */
+async function loadAllTenants(): Promise<void> {
+  if (!authStore.isAdmin) return
+  try {
+    const result = await fetchTenants({ page: 1, pageSize: 100 })
+    allTenants.value = result.items.map((t) => ({ id: t.id, name: t.name }))
+  } catch {
+    // 加载失败不影响列表页使用
   }
 }
 
@@ -121,8 +149,22 @@ function handleDelete(user: User): void {
 
 // ---------- 初始化 ----------
 onMounted(() => {
-  userStore.fetchUserList()
+  // 进入页面时重置筛选，避免上次浏览的筛选条件残留导致列表与统计不一致
+  userStore.resetFilter()
+  loadAllTenants()
 })
+
+// 导航栏切换租户后自动刷新当前租户的用户列表
+watch(
+  () => authStore.currentTenantId,
+  () => {
+    // 同步清空页面筛选输入框
+    filterUsername.value = ''
+    filterRole.value = ''
+    filterStatus.value = ''
+    userStore.resetFilter()
+  },
+)
 </script>
 
 <template>
@@ -206,6 +248,7 @@ onMounted(() => {
       :visible="dialogVisible"
       :is-editing="dialogIsEditing"
       :initial-data="dialogInitialData"
+      :tenant-options="dialogTenantOptions"
       @confirm="handleDialogConfirm"
       @cancel="handleDialogCancel"
     />

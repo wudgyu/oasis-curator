@@ -3,25 +3,33 @@
 
 - POST /api/auth/login    — 登录，返回 JWT Token
 - POST /api/auth/logout   — 登出
-- GET  /api/auth/me       — 获取当前用户信息
+- GET  /api/auth/me       — 获取当前用户信息（含可访问租户列表）
+
+依赖注入：
+- get_current_user       — 从 Bearer Token 解析当前用户
+- get_current_tenant_id  — 从 X-Tenant-Id 请求头解析上下文租户（默认主租户）
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
 from app.models.tenant import Tenant
-from app.schemas.auth import LoginRequest, TokenResponse, UserInfoResponse
+from app.models.user_tenant import UserTenant
+from app.schemas.auth import LoginRequest, TokenResponse, UserInfoResponse, TenantBrief
 from app.core.security import verify_password, create_access_token, decode_access_token
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 # HTTP Bearer Token 认证方案
 security_scheme = HTTPBearer()
+
+# 上下文租户请求头
+TENANT_HEADER = "X-Tenant-Id"
 
 
 def get_current_user(
@@ -63,6 +71,39 @@ def get_current_user(
         )
 
     return user
+
+
+def get_accessible_tenant_ids(db: Session, user: User) -> list:
+    """
+    获取用户可访问的全部租户 ID（主租户 + 关联租户，去重）
+    """
+    ids = [user.tenant_id]
+    for row in db.query(UserTenant.tenant_id).filter(UserTenant.user_id == user.id).all():
+        if row[0] not in ids:
+            ids.append(row[0])
+    return ids
+
+
+def get_current_tenant_id(
+    current_user: User = Depends(get_current_user),
+    x_tenant_id: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> str:
+    """
+    解析当前上下文租户 ID
+
+    - 未携带 X-Tenant-Id 请求头 → 返回用户主租户
+    - 携带时校验用户是否有该租户的访问权限，无权限返回 403
+    """
+    if x_tenant_id is None:
+        return current_user.tenant_id
+
+    if x_tenant_id not in get_accessible_tenant_ids(db, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问该租户",
+        )
+    return x_tenant_id
 
 
 @router.post("/login", response_model=TokenResponse, summary="用户登录")
@@ -120,10 +161,23 @@ def logout(current_user: User = Depends(get_current_user)):
 @router.get("/me", response_model=UserInfoResponse, summary="获取当前用户信息")
 def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """
-    返回当前登录用户的详细信息，包含所属租户名称。
+    返回当前登录用户的详细信息，包含可访问的租户列表。
     """
-    # 查询租户名称
+    # 查询主租户名称
     tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+
+    # 查询可访问租户列表（主租户在前 + 关联租户）
+    accessible_ids = get_accessible_tenant_ids(db, current_user)
+    tenant_map = (
+        {t.id: t.name for t in db.query(Tenant).filter(Tenant.id.in_(accessible_ids)).all()}
+        if accessible_ids
+        else {}
+    )
+    tenant_briefs = [
+        TenantBrief(id=tid, name=tenant_map[tid])
+        for tid in accessible_ids
+        if tid in tenant_map
+    ]
 
     return UserInfoResponse(
         id=current_user.id,
@@ -133,4 +187,5 @@ def get_me(current_user: User = Depends(get_current_user), db: Session = Depends
         tenant_name=tenant.name if tenant else "",
         role=current_user.role,
         status=current_user.status,
+        tenants=tenant_briefs,
     )

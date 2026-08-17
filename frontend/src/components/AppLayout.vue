@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   HomeFilled,
   UserFilled,
@@ -58,6 +58,12 @@ async function handleLogout(): Promise<void> {
   await authStore.logout()
   router.push('/login')
 }
+
+/** 切换当前上下文租户 */
+function handleTenantSwitch(tenantId: string): void {
+  authStore.switchTenant(tenantId)
+  ElMessage.success(`已切换到租户「${authStore.currentTenantName}」`)
+}
 </script>
 
 <template>
@@ -92,9 +98,6 @@ async function handleLogout(): Promise<void> {
         <div class="header-content">
           <span class="header-title">{{ route.meta.title || 'Oasis Curator' }}</span>
           <div class="header-right">
-            <span class="header-tenant" v-if="authStore.tenantName">
-              租户：{{ authStore.tenantName }}
-            </span>
             <span class="header-user">{{ authStore.username }}</span>
             <el-button
               type="danger"
@@ -105,6 +108,24 @@ async function handleLogout(): Promise<void> {
             >
               退出
             </el-button>
+            <!-- 租户切换器：可访问租户大于 1 个时显示，位于导航栏最右侧 -->
+            <el-select
+              v-if="authStore.canSwitchTenant"
+              :model-value="authStore.currentTenantId"
+              size="small"
+              style="width: 150px"
+              @change="handleTenantSwitch"
+            >
+              <el-option
+                v-for="t in authStore.accessibleTenants"
+                :key="t.id"
+                :label="t.name"
+                :value="t.id"
+              />
+            </el-select>
+            <span v-else-if="authStore.currentTenantName" class="header-tenant">
+              租户：{{ authStore.currentTenantName }}
+            </span>
           </div>
         </div>
       </el-header>

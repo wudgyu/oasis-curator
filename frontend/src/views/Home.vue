@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { UserFilled, OfficeBuilding, DataAnalysis } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchUsers } from '@/api/users'
@@ -8,6 +8,7 @@ import { fetchTenants } from '@/api/tenants'
 /**
  * 首页 / 仪表盘
  * 通过后端 API 获取真实统计数据（page_size=1 仅取总数）
+ * 统计范围 = 当前上下文租户，导航栏切换租户后自动刷新
  */
 
 const authStore = useAuthStore()
@@ -31,9 +32,10 @@ const quickActions = computed(() => {
   return actions
 })
 
-onMounted(async () => {
+async function loadStats(): Promise<void> {
+  statsLoading.value = true
   try {
-    // 并行获取统计数据
+    // 并行获取当前上下文租户的统计数据
     const [userTotal, activeUserTotal] = await Promise.all([
       fetchUsers({ page: 1, pageSize: 1 }),
       fetchUsers({ page: 1, pageSize: 1, status: 'active' }),
@@ -72,7 +74,12 @@ onMounted(async () => {
   } finally {
     statsLoading.value = false
   }
-})
+}
+
+onMounted(loadStats)
+
+// 导航栏切换租户后自动刷新统计
+watch(() => authStore.currentTenantId, loadStats)
 </script>
 
 <template>

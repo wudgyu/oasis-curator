@@ -14,6 +14,8 @@ export interface User {
   role: UserRole
   status: UserStatus
   createdAt: string
+  /** 可访问的其它租户 ID（不含主租户） */
+  tenantIds: string[]
 }
 
 /** 用户表单数据（新增/编辑） */
@@ -24,6 +26,8 @@ export interface UserFormData {
   password: string
   role: UserRole
   status: UserStatus
+  /** 可访问的其它租户 ID（不含主租户） */
+  tenantIds?: string[]
 }
 
 /** 搜索筛选条件 */
@@ -88,4 +92,12 @@ export interface UserInfo {
   tenantName: string
   role: UserRole
   status: UserStatus
+  /** 可访问的租户列表（主租户在前），用于切换当前租户 */
+  accessibleTenants: TenantBrief[]
+}
+
+/** 租户简要信息 */
+export interface TenantBrief {
+  id: string
+  name: string
 }
