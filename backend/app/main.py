@@ -8,11 +8,16 @@ Oasis Curator - FastAPI 应用入口
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import settings
 from app.database import engine, Base
 
 # 导入所有模型，确保 create_all 能发现它们
 from app.models import tenant, user  # noqa: F401
+
+# 导入 API 路由
+from app.api.auth import router as auth_router
 
 
 @asynccontextmanager
@@ -23,14 +28,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Oasis Curator API",
+    title=settings.APP_NAME + " API",
     description="绿洲馆长 - 多租户 AI 文档平台后端服务",
-    version="0.1.0",
+    version=settings.APP_VERSION,
     lifespan=lifespan,
 )
+
+# CORS 中间件：允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册路由
+app.include_router(auth_router)
 
 
 @app.get("/api/health")
 def health_check():
     """健康检查接口"""
-    return {"status": "ok", "service": "Oasis Curator"}
+    return {"status": "ok", "service": settings.APP_NAME}
