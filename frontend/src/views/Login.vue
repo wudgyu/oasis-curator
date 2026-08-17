@@ -100,7 +100,7 @@ async function handleLogin(): Promise<void> {
         </el-form-item>
       </el-form>
       <div class="login-footer">
-        <span>测试账号：admin / admin123 · viewer / viewer123</span>
+        <span>测试账号：admin / admin123（平台）· zhangsan / zhangsan123（经理）· lisi / lisi123456（员工）</span>
       </div>
     </div>
   </div>

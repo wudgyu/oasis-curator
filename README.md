@@ -189,19 +189,21 @@ pnpm dev
 
 访问 `http://localhost:5173`，使用测试账号登录：
 
-| 账号 | 密码 | 角色 | 租户 | 可访问租户 |
-|------|------|------|------|-----------|
-| admin | admin123 | admin | 星辰科技 | 星辰科技 + 云端数据 |
-| editor | editor123 | editor | 星辰科技 | 星辰科技 + 云端数据 |
-| viewer | viewer123 | viewer | 星辰科技 | 星辰科技 |
-| cloud_admin | admin123 | admin | 云端数据 | 云端数据 |
+| 账号 | 密码 | 角色 | 租户 / 组织 |
+|------|------|------|-------------|
+| admin | admin123 | admin（平台管理员） | 平台（无租户归属） |
+| zhangsan | zhangsan123 | manager（经理） | 星辰科技 / 研发部 |
+| lisi | lisi123456 | employee（员工） | 星辰科技 / 研发部·后端组 |
+| wangwu | wangwu123 | auditor（审计员） | 星辰科技 / 根组织 |
+| zhaoliu | zhaoliu123 | manager（经理） | 星辰科技 / 市场部 |
 
 > 🔐 **认证授权底座（已完成）**：本项目已完成阶段一 —— 统一认证授权基础设施，作为后续所有 AI 模块的底座：
-> - **JWT 认证**：登录签发 Token（含 `user_id`/`tenant_id`/`role`，24h 过期），接口通过 `Authorization: Bearer` 鉴权
-> - **RBAC 权限**：admin 可管理用户/租户；editor 可查看本租户用户；viewer 仅可见自己
-> - **多租户隔离**：用户列表自动按上下文租户过滤，跨租户操作返回 403
-> - **租户切换**：用户可访问多个租户时，导航栏最右侧出现租户切换器（`X-Tenant-Id` 请求头携带上下文），首页统计与用户列表实时联动
-> - **前后端联调**：Vue 3 前端已完全接入后端 API（登录态保持、401 自动跳转、按角色渲染 UI）
+> - **RBAC 权限模型**：平台 admin + 租户内固定角色（manager / auditor / employee），角色决定功能权限与数据范围（详见 `oasis-curator-rbac-model.md`）
+> - **组织树管理**：租户内逐级组织树（物化路径实现子树查询），manager 可管理本组织及子组织
+> - **数据范围**：employee 仅本组织；auditor / manager 本组织 + 子组织；admin 上下文租户全量
+> - **JWT 认证**：登录签发 Token（24h 过期），接口通过 `Authorization: Bearer` 鉴权，角色变更实时生效
+> - **多租户隔离**：普通用户唯一归属一个租户；admin 通过 `X-Tenant-Id` 切换工作区租户
+> - **前后端联调**：Vue 3 前端已完全接入后端 API（组织树管理页、按角色渲染 UI、401 自动跳转）
 
 ---
 
@@ -242,15 +244,16 @@ pnpm dev
 oasis-curator/
 ├── frontend/                  # Vue 3 前端（pnpm 管理）
 │   ├── src/
-│   │   ├── api/               # 类型化 API 层（auth / tenants / users）
+│   │   ├── api/               # 类型化 API 层（auth / tenants / orgs / users / roles）
 │   │   ├── components/        # AppLayout / UserTable / UserFormDialog / TenantTable / TenantFormDialog
 │   │   ├── views/
 │   │   │   ├── Login.vue              # 登录页（对接 /api/auth/login）
-│   │   │   ├── Home.vue               # 首页仪表盘（真实统计数据）
-│   │   │   ├── UserManagement.vue     # 用户管理（服务端分页 + 角色按钮控制）
+│   │   │   ├── Home.vue               # 首页仪表盘（按角色范围统计）
+│   │   │   ├── OrgManagement.vue      # 组织管理（组织树 + 节点操作）
+│   │   │   ├── UserManagement.vue     # 用户管理（服务端分页 + 数据范围 + 角色按钮控制）
 │   │   │   └── TenantManagement.vue   # 租户管理（仅 admin）
 │   │   ├── stores/           # Pinia stores（auth / user / tenant）
-│   │   ├── utils/request.ts  # Axios 拦截器（Token 注入 + 401 跳转 + 统一错误提示）
+│   │   ├── utils/request.ts  # Axios 拦截器（Token + X-Tenant-Id 注入 + 401 跳转 + 统一错误提示）
 │   │   ├── router/           # 路由 + 导航守卫（登录校验 + 角色校验）
 │   │   └── types/            # TypeScript 类型定义
 │   ├── package.json
@@ -259,16 +262,20 @@ oasis-curator/
 ├── backend/                   # FastAPI 后端
 │   ├── app/
 │   │   ├── api/              # 路由模块
-│   │   │   ├── auth.py               # 登录 / 登出 / 当前用户 + get_current_user 依赖
-│   │   │   ├── tenants.py            # 租户 CRUD（admin）
-│   │   │   └── users.py              # 用户 CRUD（租户隔离 + RBAC）
+│   │   │   ├── auth.py               # 登录 / 登出 / 当前用户 + 上下文租户依赖
+│   │   │   ├── tenants.py            # 租户 CRUD（admin，自动建根组织）
+│   │   │   ├── orgs.py               # 组织树 CRUD（移动防环 + 空组织删除约束）
+│   │   │   ├── users.py              # 用户 CRUD（角色数据范围 + 根组织 manager 保底）
+│   │   │   └── roles.py              # 可分配角色列表
 │   │   ├── core/             # 核心模块
 │   │   │   ├── config.py             # pydantic-settings 配置
-│   │   │   └── security.py           # JWT 签发/校验 + bcrypt 密码哈希
-│   │   ├── models/           # SQLAlchemy 模型（tenants / users）
+│   │   │   ├── security.py           # JWT 签发/校验 + bcrypt 密码哈希
+│   │   │   └── permission.py         # RBAC 权限判定层（DataScope + 子树校验 + 组织移动）
+│   │   ├── models/           # SQLAlchemy 模型（tenants / organizations / roles / users）
 │   │   ├── schemas/          # Pydantic 请求/响应模型
 │   │   └── main.py           # 应用入口（自动建表 + CORS）
-│   ├── seed.py               # 种子数据（3 租户 + 5 测试用户）
+│   ├── scripts/              # 权限矩阵自测脚本（组织 21 例 + 用户 24 例）
+│   ├── seed.py               # 种子数据（平台管理员 + 3 租户 + 组织树 + 演示用户）
 │   └── requirements.txt
 │
 ├── scripts/
