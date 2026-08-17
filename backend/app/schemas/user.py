@@ -1,14 +1,16 @@
 """
-用户相关 Pydantic 模型
+用户相关 Pydantic 模型（RBAC 新结构）
 
-- UserCreate / UserUpdate: 请求体
-- UserResponse / UserListResponse: 响应体
+- UserCreate / UserUpdate: 请求体（org_id + role_code）
+- UserResponse / UserListResponse: 响应体（含组织信息）
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
+
+from app.schemas.org import OrgResponse
 
 
 class UserCreate(BaseModel):
@@ -16,10 +18,9 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=50, description="用户名")
     email: EmailStr = Field(..., description="邮箱")
     password: str = Field(..., min_length=6, max_length=128, description="密码")
-    role: str = Field(default="viewer", pattern="^(admin|editor|viewer)$", description="角色")
+    org_id: str = Field(..., description="所属组织 ID")
+    role_code: str = Field(..., pattern="^(manager|auditor|employee)$", description="角色 code")
     status: str = Field(default="active", pattern="^(active|disabled)$", description="状态")
-    # 可访问的其它租户 ID（主租户 = 创建时的上下文租户）
-    tenant_ids: Optional[List[str]] = Field(None, description="可访问的其它租户 ID 列表")
 
 
 class UserUpdate(BaseModel):
@@ -27,10 +28,9 @@ class UserUpdate(BaseModel):
     username: Optional[str] = Field(None, min_length=1, max_length=50, description="用户名")
     email: Optional[EmailStr] = Field(None, description="邮箱")
     password: Optional[str] = Field(None, min_length=6, max_length=128, description="密码")
-    role: Optional[str] = Field(None, pattern="^(admin|editor|viewer)$", description="角色")
+    org_id: Optional[str] = Field(None, description="所属组织 ID")
+    role_code: Optional[str] = Field(None, pattern="^(manager|auditor|employee)$", description="角色 code")
     status: Optional[str] = Field(None, pattern="^(active|disabled)$", description="状态")
-    # 可访问的其它租户 ID 列表（提交时整体替换）
-    tenant_ids: Optional[List[str]] = Field(None, description="可访问的其它租户 ID 列表")
 
 
 class UserResponse(BaseModel):
@@ -38,14 +38,11 @@ class UserResponse(BaseModel):
     id: str
     username: str
     email: str
-    tenant_id: str
-    tenant_name: str = ""
-    role: str
+    org: OrgResponse
+    role_code: str
     status: str
     created_at: datetime
     updated_at: datetime
-    # 可访问的其它租户 ID（不含主租户）
-    tenant_ids: List[str] = []
 
     class Config:
         from_attributes = True
@@ -58,3 +55,9 @@ class UserListResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class RoleOption(BaseModel):
+    """可选角色项"""
+    code: str
+    name: str

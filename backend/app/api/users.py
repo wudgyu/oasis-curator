@@ -1,18 +1,21 @@
 """
-用户管理 API 路由
+用户管理 API 路由（RBAC 数据范围）
 
-- GET    /api/users      — 分页查询用户列表（按上下文租户隔离）
-- POST   /api/users      — 新增用户（admin，归属上下文租户）
-- PUT    /api/users/{id} — 编辑用户（admin，上下文租户内）
-- DELETE /api/users/{id} — 删除用户（admin，上下文租户内）
+- GET    /api/users      — 分页查询（按角色数据范围过滤）
+- POST   /api/users      — 在指定组织创建用户并配置角色
+- PUT    /api/users/{id} — 修改用户信息/角色/状态/所属组织
+- DELETE /api/users/{id} — 删除用户
 
-上下文租户：通过 X-Tenant-Id 请求头切换（见 get_current_tenant_id），
-未携带时默认为用户主租户。
+数据范围（get_data_scope）：
+- admin:     上下文租户内全部
+- manager:   本组织 + 子组织（可写）
+- auditor:   本组织 + 子组织（只读）
+- employee:  仅本组织（只读）
 
-权限模型：
-- admin: 可管理上下文租户的所有用户
-- editor: 可查看上下文租户的所有用户
-- viewer: 只能查看自己
+防护规则：
+- 任何人不能修改自己的角色/状态、不能删除自己
+- 根组织最后一名 manager 保底（防租户失管）
+- 平台管理员账号（tenant_id IS NULL）不受租户 manager 管辖
 """
 
 import math
@@ -23,58 +26,87 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.user import User
-from app.models.tenant import Tenant
-from app.models.user_tenant import UserTenant
+from app.models.role import Role
+from app.models.organization import Organization
 from app.schemas.user import UserCreate, UserUpdate, UserResponse, UserListResponse
 from app.core.security import hash_password
-from app.api.auth import get_current_user, get_current_tenant_id
+from app.core.permission import get_data_scope, get_role_code, can_manage_org, can_manage_user
+from app.api.auth import get_current_user, require_context_tenant_id
 
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
 
-
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    """权限校验：仅 admin 角色可执行写操作"""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="仅管理员可执行此操作",
-        )
-    return current_user
+# 可通过本 API 分配的角色（admin 为平台内置，不在此列）
+ASSIGNABLE_ROLES = ("manager", "auditor", "employee")
 
 
-def get_user_tenant_ids(db: Session, user_id: str) -> list:
-    """查询用户关联的其它租户 ID（不含主租户）"""
-    return [
-        row[0]
-        for row in db.query(UserTenant.tenant_id)
-        .filter(UserTenant.user_id == user_id)
-        .all()
-    ]
+def org_to_response(org: Organization):
+    """组织 ORM → OrgResponse（复用 org schema）"""
+    from app.schemas.org import OrgResponse
+    return OrgResponse(
+        id=org.id, name=org.name, path=org.path, parent_id=org.parent_id,
+        tenant_id=org.tenant_id, created_at=org.created_at, updated_at=org.updated_at,
+    )
 
 
-def sync_user_tenants(db: Session, user_id: str, tenant_ids: list) -> None:
-    """整体替换用户的可访问租户关联（去除主租户重复项）"""
-    db.query(UserTenant).filter(UserTenant.user_id == user_id).delete()
-    for tid in tenant_ids:
-        db.add(UserTenant(user_id=user_id, tenant_id=tid))
-
-
-def user_to_response(
-    user: User, tenant_name: str = "", tenant_ids: Optional[list] = None
-) -> UserResponse:
-    """将 ORM 模型转换为响应 Schema"""
+def user_to_response(user: User, org: Organization, role_code: str) -> UserResponse:
     return UserResponse(
         id=user.id,
         username=user.username,
         email=user.email,
-        tenant_id=user.tenant_id,
-        tenant_name=tenant_name,
-        role=user.role,
+        org=org_to_response(org),
+        role_code=role_code,
         status=user.status,
         created_at=user.created_at,
         updated_at=user.updated_at,
-        tenant_ids=tenant_ids if tenant_ids is not None else [],
     )
+
+
+def resolve_role(db: Session, role_code: str) -> Role:
+    """校验并返回可分配角色"""
+    role = db.query(Role).filter(Role.code == role_code, Role.tenant_id.is_(None)).first()
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无效的角色：{role_code}",
+        )
+    return role
+
+
+def get_root_org(db: Session, tenant_id: str) -> Organization:
+    """获取租户根组织"""
+    return (
+        db.query(Organization)
+        .filter(Organization.tenant_id == tenant_id, Organization.parent_id.is_(None))
+        .first()
+    )
+
+
+def guard_last_root_manager(db: Session, user: User, new_role_code: Optional[str]) -> None:
+    """
+    根组织最后一名 manager 保底：
+    降权/删除/迁移根组织 manager 前，根组织必须仍保留至少一名 manager。
+    """
+    if user.tenant_id is None or user.org_id is None:
+        return  # 平台管理员不适用
+    root = get_root_org(db, user.tenant_id)
+    if root is None or user.org_id != root.id:
+        return  # 非根组织用户不适用
+
+    role_code = get_role_code(user, db)
+    # 目标用户当前是根组织 manager，且即将不再是 manager
+    if role_code == "manager" and new_role_code != "manager":
+        manager_role = db.query(Role).filter(Role.code == "manager").first()
+        manager_count = (
+            db.query(User)
+            .filter(User.org_id == root.id, User.role_id == manager_role.id,
+                    User.status == "active")
+            .count()
+        )
+        if manager_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="根组织至少需要保留一名经理，无法执行该操作",
+            )
 
 
 @router.get("", response_model=UserListResponse, summary="分页查询用户列表")
@@ -84,52 +116,58 @@ def list_users(
     username: str = Query("", description="按用户名模糊搜索"),
     role: str = Query("", description="按角色筛选"),
     status_filter: str = Query("", alias="status", description="按状态筛选"),
+    org_id: str = Query("", description="按组织筛选"),
+    include_children: bool = Query(False, description="组织筛选是否含子组织"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    context_tenant_id: str = Depends(get_current_tenant_id),
+    context_tenant_id: str = Depends(require_context_tenant_id),
 ):
-    """
-    分页查询用户列表。
+    """分页查询用户列表，自动按当前用户角色的数据范围过滤"""
+    query = db.query(User, Organization).join(
+        Organization, User.org_id == Organization.id
+    ).filter(User.tenant_id == context_tenant_id)
 
-    - admin / editor: 可查看上下文租户的所有用户
-    - viewer: 只能查看自己
-    - 按上下文租户（X-Tenant-Id）过滤
-    """
-    # 租户隔离：仅查询上下文租户
-    query = db.query(User).filter(User.tenant_id == context_tenant_id)
+    # 角色数据范围
+    scope = get_data_scope(current_user, db)
+    if scope.type == "org_only":
+        query = query.filter(User.org_id == scope.org_id)
+    elif scope.type == "subtree":
+        query = query.filter(Organization.path.like(f"{scope.path_prefix}%"))
+    # GLOBAL 不过滤
 
-    # viewer 只能看自己
-    if current_user.role == "viewer":
-        query = query.filter(User.id == current_user.id)
-
+    # 条件筛选
     if username:
         query = query.filter(User.username.contains(username))
     if role:
-        query = query.filter(User.role == role)
+        query = query.join(Role, User.role_id == Role.id).filter(Role.code == role)
     if status_filter:
         query = query.filter(User.status == status_filter)
+    if org_id:
+        if include_children:
+            target = db.query(Organization).filter(Organization.id == org_id).first()
+            if target is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="组织不存在")
+            query = query.filter(Organization.path.like(f"{target.path}%"))
+        else:
+            query = query.filter(User.org_id == org_id)
 
     total = query.count()
     total_pages = math.ceil(total / page_size) if total > 0 else 0
-    users = (
+    rows = (
         query.order_by(User.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
 
-    # 批量查询租户名称与关联租户
-    tenant_ids = {u.tenant_id for u in users}
-    tenants = {t.id: t.name for t in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all()}
-    user_ids = [u.id for u in users]
-    assoc_map: dict = {uid: [] for uid in user_ids}
-    for row in db.query(UserTenant).filter(UserTenant.user_id.in_(user_ids)).all():
-        assoc_map[row.user_id].append(row.tenant_id)
+    # 批量查询角色 code
+    role_ids = {u.role_id for u, _ in rows}
+    role_map = {r.id: r.code for r in db.query(Role).filter(Role.id.in_(role_ids)).all()}
 
     return UserListResponse(
         items=[
-            user_to_response(u, tenants.get(u.tenant_id, ""), assoc_map.get(u.id, []))
-            for u in users
+            user_to_response(u, org, role_map.get(u.role_id, ""))
+            for u, org in rows
         ],
         total=total,
         page=page,
@@ -142,15 +180,26 @@ def list_users(
 def create_user(
     body: UserCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
-    context_tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    context_tenant_id: str = Depends(require_context_tenant_id),
 ):
-    """
-    新增用户，归属到当前上下文租户。
+    """在指定组织创建用户并配置角色（admin / 子树内 manager）"""
+    # 目标组织校验
+    org = db.query(Organization).filter(Organization.id == body.org_id).first()
+    if org is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="组织不存在")
+    if org.tenant_id != context_tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="目标组织不属于上下文租户",
+        )
+    if not can_manage_org(current_user, db, org):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限在该组织下创建用户",
+        )
 
-    用户名在上下文租户内唯一；tenant_ids 指定可访问的其它租户。
-    """
-    # 用户名唯一校验（上下文租户范围内）
+    # 用户名租户内唯一
     existing = (
         db.query(User)
         .filter(User.tenant_id == context_tenant_id, User.username == body.username)
@@ -162,27 +211,20 @@ def create_user(
             detail=f"用户名「{body.username}」在当前租户中已存在",
         )
 
+    role = resolve_role(db, body.role_code)
     user = User(
         username=body.username,
         email=body.email,
         password_hash=hash_password(body.password),
         tenant_id=context_tenant_id,
-        role=body.role,
+        org_id=org.id,
+        role_id=role.id,
         status=body.status,
     )
     db.add(user)
-    db.flush()  # 先获取 user.id
-
-    # 建立可访问租户关联（排除主租户自身）
-    extra_ids = [tid for tid in (body.tenant_ids or []) if tid != context_tenant_id]
-    sync_user_tenants(db, user.id, extra_ids)
-
     db.commit()
     db.refresh(user)
-
-    # 查询租户名称
-    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
-    return user_to_response(user, tenant.name if tenant else "", extra_ids)
+    return user_to_response(user, org, role.code)
 
 
 @router.put("/{user_id}", response_model=UserResponse, summary="编辑用户")
@@ -190,28 +232,56 @@ def update_user(
     user_id: str,
     body: UserUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
-    context_tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    context_tenant_id: str = Depends(require_context_tenant_id),
 ):
-    """
-    编辑用户信息，仅更新提交的字段。
-
-    编辑范围受租户隔离限制：仅能编辑上下文租户的用户。
-    tenant_ids 提交时整体替换用户的租户关联。
-    """
+    """修改用户信息（admin / 子树内 manager；任何人不能改自己的角色与状态）"""
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户不存在",
-        )
-
-    # 租户隔离：不能编辑上下文租户之外的用户
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     if user.tenant_id != context_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="不能编辑其他租户的用户",
+            detail="用户不属于上下文租户",
         )
+    if not can_manage_user(current_user, db, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限编辑该用户",
+        )
+
+    # 不能修改自己的角色/状态
+    if user.id == current_user.id and (body.role_code is not None or body.status is not None):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能修改自己的角色或状态",
+        )
+
+    # 根组织最后一名 manager 保底
+    if body.role_code is not None or body.org_id is not None or body.status == "disabled":
+        new_role = body.role_code
+        if body.role_code is None:
+            new_role = get_role_code(user, db)
+        guard_last_root_manager(db, user, new_role)
+
+    # 更新所属组织
+    org = db.query(Organization).filter(Organization.id == user.org_id).first()
+    if body.org_id is not None and body.org_id != user.org_id:
+        new_org = db.query(Organization).filter(Organization.id == body.org_id).first()
+        if new_org is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="组织不存在")
+        if new_org.tenant_id != context_tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="目标组织不属于上下文租户",
+            )
+        if not can_manage_org(current_user, db, new_org):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权限将用户迁移到该组织",
+            )
+        user.org_id = new_org.id
+        org = new_org
 
     # 更新用户名时检查唯一性
     if body.username is not None and body.username != user.username:
@@ -231,59 +301,50 @@ def update_user(
         user.email = body.email
     if body.password is not None:
         user.password_hash = hash_password(body.password)
-    if body.role is not None:
-        user.role = body.role
     if body.status is not None:
         user.status = body.status
 
-    # 更新租户关联
-    extra_ids = []
-    if body.tenant_ids is not None:
-        extra_ids = [tid for tid in body.tenant_ids if tid != user.tenant_id]
-        sync_user_tenants(db, user.id, extra_ids)
+    role_code = get_role_code(user, db)
+    if body.role_code is not None:
+        role = resolve_role(db, body.role_code)
+        user.role_id = role.id
+        role_code = role.code
 
     db.commit()
     db.refresh(user)
-
-    tenant = db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
-    current_extra_ids = extra_ids if body.tenant_ids is not None else get_user_tenant_ids(db, user.id)
-    return user_to_response(user, tenant.name if tenant else "", current_extra_ids)
+    return user_to_response(user, org, role_code)
 
 
 @router.delete("/{user_id}", summary="删除用户")
 def delete_user(
     user_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
-    context_tenant_id: str = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_user),
+    context_tenant_id: str = Depends(require_context_tenant_id),
 ):
-    """
-    删除用户。
-
-    限制：不能删除自己，不能删除上下文租户之外的用户。
-    """
+    """删除用户（admin / 子树内 manager；不能删除自己）"""
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户不存在",
-        )
-
-    # 租户隔离
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     if user.tenant_id != context_tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="不能删除其他租户的用户",
+            detail="用户不属于上下文租户",
         )
-
-    # 不能删除自己
     if user.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="不能删除当前登录用户",
         )
+    if not can_manage_user(current_user, db, user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权限删除该用户",
+        )
+
+    # 根组织最后一名 manager 保底
+    guard_last_root_manager(db, user, None)
 
     db.delete(user)
     db.commit()
-
     return {"message": f"已删除用户「{user.username}」"}
