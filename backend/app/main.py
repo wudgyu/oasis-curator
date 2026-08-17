@@ -18,6 +18,7 @@ from app.models import tenant, user  # noqa: F401
 
 # 导入 API 路由
 from app.api.auth import router as auth_router
+from app.api.tenants import router as tenants_router
 
 
 @asynccontextmanager
@@ -45,6 +46,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(auth_router)
+app.include_router(tenants_router)
 
 
 @app.get("/api/health")
