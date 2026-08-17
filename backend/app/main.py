@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.database import engine, Base
 
 # 导入所有模型，确保 create_all 能发现它们
-from app.models import tenant, user, user_tenant  # noqa: F401
+from app.models import tenant, organization, role, user  # noqa: F401
 
 # 导入 API 路由
 from app.api.auth import router as auth_router

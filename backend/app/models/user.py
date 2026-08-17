@@ -1,19 +1,15 @@
 """
-用户模型 (User Model)
+用户模型 (User)
 
-字段：
-- id: UUID 主键，自动生成
-- username: 用户名，唯一索引
-- email: 邮箱
-- password_hash: 密码哈希值
-- tenant_id: 外键关联 tenants 表
-- role: 角色（admin / editor / viewer）
-- status: 状态（active / disabled）
-- created_at / updated_at: 时间戳
+RBAC 1:1:1 模型：用户唯一归属一个租户 + 一个组织 + 持有一个角色。
+- 平台管理员（role.code = 'admin'）：tenant_id / org_id 均为 NULL，全局通行
+- 普通用户：tenant_id / org_id 必填，数据范围由角色决定
+- username 在租户内唯一（应用层校验）
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import String, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -27,15 +23,20 @@ class User(Base):
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid.uuid4())
     )
-    username: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
+    # NULL = 平台管理员
+    tenant_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("tenants.id"), nullable=True, index=True
     )
+    # NULL = 平台管理员
+    org_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("organizations.id"), nullable=True, index=True
+    )
+    role_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("roles.id"), nullable=False
+    )
+    username: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(100), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    tenant_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("tenants.id"), nullable=False, index=True
-    )
-    role: Mapped[str] = mapped_column(String(20), nullable=False, default="viewer")
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -45,4 +46,4 @@ class User(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<User(id={self.id}, username={self.username}, role={self.role})>"
+        return f"<User(id={self.id}, username={self.username})>"
