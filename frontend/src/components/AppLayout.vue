@@ -35,6 +35,12 @@ const visibleMenus = computed(() =>
 
 const activeMenu = computed(() => route.path)
 
+/**
+ * 是否显示租户上下文控件（切换器/租户标签）
+ * 租户管理页是全局视图（展示所有租户），不按上下文租户隔离，无需显示
+ */
+const showTenantContext = computed(() => route.path !== '/tenants')
+
 function handleMenuSelect(path: string): void {
   router.push(path)
 }
@@ -98,19 +104,9 @@ function handleTenantSwitch(tenantId: string): void {
         <div class="header-content">
           <span class="header-title">{{ route.meta.title || 'Oasis Curator' }}</span>
           <div class="header-right">
-            <span class="header-user">{{ authStore.username }}</span>
-            <el-button
-              type="danger"
-              :icon="SwitchButton"
-              text
-              size="small"
-              @click="handleLogout"
-            >
-              退出
-            </el-button>
-            <!-- 租户切换器：可访问租户大于 1 个时显示，位于导航栏最右侧 -->
+            <!-- 租户切换器：可访问租户大于 1 个时显示，位于登录用户与登出按钮之前 -->
             <el-select
-              v-if="authStore.canSwitchTenant"
+              v-if="authStore.canSwitchTenant && showTenantContext"
               :model-value="authStore.currentTenantId"
               size="small"
               style="width: 150px"
@@ -123,9 +119,22 @@ function handleTenantSwitch(tenantId: string): void {
                 :value="t.id"
               />
             </el-select>
-            <span v-else-if="authStore.currentTenantName" class="header-tenant">
+            <span
+              v-else-if="authStore.currentTenantName && showTenantContext"
+              class="header-tenant"
+            >
               租户：{{ authStore.currentTenantName }}
             </span>
+            <span class="header-user">{{ authStore.username }}</span>
+            <el-button
+              type="danger"
+              :icon="SwitchButton"
+              text
+              size="small"
+              @click="handleLogout"
+            >
+              退出
+            </el-button>
           </div>
         </div>
       </el-header>
