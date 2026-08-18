@@ -88,7 +88,13 @@ async function loadStats(): Promise<void> {
   }
 }
 
-onMounted(loadStats)
+// admin 登录后 currentTenantId 初始为空，等待 AppLayout 加载租户列表后通过
+// watcher 触发首次加载；普通用户 currentTenantId 在登录时已设置，直接加载即可
+onMounted(() => {
+  if (authStore.currentTenantId) {
+    loadStats()
+  }
+})
 
 // admin 切换工作区租户后自动刷新统计
 // 登出会清空 currentTenantId，此时不再发起请求（否则产生无凭证的 403 请求）
