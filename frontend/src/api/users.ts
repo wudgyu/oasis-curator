@@ -72,7 +72,18 @@ function mapUser(raw: RawUser): User {
 
 /** 分页查询用户列表（后端自动按角色数据范围过滤） */
 export async function fetchUsers(params: UserListParams): Promise<PageResult<User>> {
-  const { data } = await request.get<RawPageResult>('/users', { params })
+  // 前端 camelCase → 后端 snake_case 参数名映射
+  const { data } = await request.get<RawPageResult>('/users', {
+    params: {
+      page: params.page,
+      page_size: params.pageSize,
+      username: params.username,
+      role: params.role,
+      status: params.status,
+      org_id: params.orgId,
+      include_children: params.includeChildren,
+    },
+  })
   return {
     items: data.items.map(mapUser),
     total: data.total,

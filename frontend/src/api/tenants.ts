@@ -45,7 +45,15 @@ function mapTenant(raw: RawTenant): Tenant {
 
 /** 分页查询租户列表 */
 export async function fetchTenants(params: TenantListParams): Promise<PageResult<Tenant>> {
-  const { data } = await request.get<RawPageResult>('/tenants', { params })
+  const { data } = await request.get<RawPageResult>('/tenants', {
+    params: {
+      page: params.page,
+      page_size: params.pageSize,
+      name: params.name,
+      plan: params.plan,
+      status: params.status,
+    },
+  })
   return {
     items: data.items.map(mapTenant),
     total: data.total,
