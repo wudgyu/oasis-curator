@@ -26,11 +26,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/Home.vue'),
         meta: { title: '首页' },
       },
-      {
-        path: 'users',
-        name: 'UserManagement',
-        component: () => import('@/views/UserManagement.vue'),
-        meta: { title: '用户管理' },
+       {
+        path: 'tenants',
+        name: 'TenantManagement',
+        component: () => import('@/views/TenantManagement.vue'),
+        meta: { title: '租户管理', requiresAdmin: true },
       },
       {
         path: 'orgs',
@@ -39,10 +39,10 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '组织管理' },
       },
       {
-        path: 'tenants',
-        name: 'TenantManagement',
-        component: () => import('@/views/TenantManagement.vue'),
-        meta: { title: '租户管理', requiresAdmin: true },
+        path: 'users',
+        name: 'UserManagement',
+        component: () => import('@/views/UserManagement.vue'),
+        meta: { title: '用户管理' },
       },
     ],
   },

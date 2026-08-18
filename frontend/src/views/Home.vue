@@ -137,12 +137,6 @@ watch(() => authStore.currentTenantId, (newId) => {
         <span>快速入口</span>
       </template>
       <div class="action-list">
-        <el-button type="primary" plain @click="$router.push('/orgs')">
-          组织管理
-        </el-button>
-        <el-button type="primary" plain @click="$router.push('/users')">
-          用户管理
-        </el-button>
         <el-button
           v-if="authStore.isAdmin"
           type="primary"
@@ -150,6 +144,12 @@ watch(() => authStore.currentTenantId, (newId) => {
           @click="$router.push('/tenants')"
         >
           租户管理
+        </el-button>
+        <el-button type="primary" plain @click="$router.push('/orgs')">
+          组织管理
+        </el-button>
+        <el-button type="primary" plain @click="$router.push('/users')">
+          用户管理
         </el-button>
       </div>
     </el-card>
