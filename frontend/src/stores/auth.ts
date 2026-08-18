@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { RoleCode, TenantBrief, OrgBrief } from '@/types'
 import * as authApi from '@/api/auth'
+import { ro } from 'element-plus/es/locales.mjs'
 
 /**
  * 认证授权 Store（RBAC 模型）
@@ -34,6 +35,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   /** 是否为平台管理员 */
   const isAdmin = computed(() => roleCode.value === 'admin')
+
+  /** 是否为审计员 */
+  const isAuditor = computed(() => roleCode.value === 'auditor')
 
   /** 是否有写权限（admin / manager） */
   const canWrite = computed(() => ['admin', 'manager'].includes(roleCode.value))
@@ -172,6 +176,7 @@ export const useAuthStore = defineStore('auth', () => {
     // 计算属性
     isLoggedIn,
     isAdmin,
+    isAuditor,
     canWrite,
     canSwitchTenant,
     // 方法

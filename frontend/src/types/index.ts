@@ -7,6 +7,9 @@ export type AssignableRoleCode = 'manager' | 'auditor' | 'employee'
 /** 用户状态 */
 export type UserStatus = 'active' | 'disabled'
 
+/** 节点权限 */
+export type NodeAuth = 'manage' | 'view' | 'none'
+
 /** 租户简要信息 */
 export interface TenantBrief {
   id: string

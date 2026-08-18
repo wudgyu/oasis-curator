@@ -56,23 +56,64 @@ function handleSizeChange(size: number): void {
 const orgTree = ref<OrgTreeNode[]>([])
 const roleOptions = ref<RoleOption[]>([])
 
-/** 管理器可选的组织树（限其子树）；admin 全树 */
+/** 管理器可选的组织树（限其子树） */
 const scopedOrgTree = computed<OrgTreeNode[]>(() => {
+  // admin 全树
   if (authStore.isAdmin) return orgTree.value
-  if (authStore.roleCode === 'manager') {
+  // manager、auditor 子树
+  if (authStore.roleCode === 'manager' || authStore.roleCode === 'auditor') {
     return filterTreeByPath(orgTree.value, authStore.orgPath)
   }
-  return []
+  // employee 组织单节点
+  const pathNode = filterTreeOnlyPath(orgTree.value, authStore.orgPath);
+  return pathNode == null ? [] : [pathNode]
 })
 
 function filterTreeByPath(nodes: OrgTreeNode[], prefix: string): OrgTreeNode[] {
   const result: OrgTreeNode[] = []
+  // 递归遍历组织树
   for (const n of nodes) {
+    // 目标path不在当前树上，直接返回
+    if (!prefix.startsWith(n.path)) {
+      continue
+    }
+
+    // 当前根节点path符合目标path，则整树添加
     if (n.path.startsWith(prefix)) {
-      result.push({ ...n, children: filterTreeByPath(n.children, prefix) })
+      result.push({ ...n, children: n.children })
+    }
+    // 否则递归检查子节点
+    else {
+      const subTree: OrgTreeNode[] = filterTreeByPath(n.children, prefix);
+      // 如果匹配到目标path，则截断树返回
+      if (subTree.length > 0) {
+        const subRoot = subTree[0]
+        result.push({ ...subRoot, children: subRoot.children })
+      }
     }
   }
   return result
+}
+
+function filterTreeOnlyPath(nodes: OrgTreeNode[], prefix: string): OrgTreeNode | null {
+  for (const n of nodes) {
+    // 目标path不在当前树上，直接返回
+    if (!prefix.startsWith(n.path)) {
+      break
+    }
+    // 当前根节点path符合目标path，则添加节点
+    if (n.path == prefix) {
+      return { ...n }
+    }
+    // 否则递归检查子节点
+    else {
+      const targetNode = filterTreeOnlyPath(n.children, prefix)
+      if (targetNode != null) {
+        return { ...targetNode }
+      }
+    }
+  }
+  return null
 }
 
 async function loadOrgData(): Promise<void> {
@@ -233,7 +274,7 @@ watch(
       </el-select>
       <el-tree-select
         v-model="filterOrgId"
-        :data="orgTree"
+        :data="scopedOrgTree"
         node-key="id"
         :props="{ label: 'name', children: 'children' }"
         check-strictly

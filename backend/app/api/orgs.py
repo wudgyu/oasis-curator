@@ -21,7 +21,7 @@ from app.models.organization import Organization
 from app.schemas.org import OrgCreate, OrgUpdate, OrgMoveRequest, OrgResponse, OrgTreeNode
 from app.api.auth import get_current_user, require_context_tenant_id
 from app.core.permission import (
-    get_role_code, get_user_org, can_manage_org, build_child_path, move_organization,
+    get_role_code, get_user_org, can_manage_org, check_org_auth, AuthType, build_child_path, move_organization,
 )
 
 router = APIRouter(prefix="/api/orgs", tags=["组织管理"])
@@ -48,7 +48,7 @@ def require_write_org(
     return org
 
 
-def build_tree(db: Session, tenant_id: str) -> list:
+def build_tree(db: Session, current_user: User, tenant_id: str) -> list:
     """构建组织树（嵌套结构）"""
     orgs = (
         db.query(Organization)
@@ -60,15 +60,12 @@ def build_tree(db: Session, tenant_id: str) -> list:
         id=o.id, name=o.name, path=o.path, parent_id=o.parent_id, children=[]
     ) for o in orgs}
 
-    # 统计每个组织的直属用户数
-    for user in db.query(User).filter(User.tenant_id == tenant_id, User.org_id.isnot(None)).all():
-        node = nodes.get(user.org_id)
-        if node is not None:
-            node.user_count += 1
-
     roots: list = []
     for o in orgs:
         node = nodes[o.id]
+        # 统计每个组织的直属用户数（当前用户有权限时）
+        if check_org_auth(current_user, db, o) != AuthType.NONE :
+            node.user_count = db.query(User).filter(User.tenant_id == tenant_id, User.org_id == o.id).count()
         if o.parent_id is not None and o.parent_id in nodes:
             nodes[o.parent_id].children.append(node)
         else:
@@ -79,11 +76,11 @@ def build_tree(db: Session, tenant_id: str) -> list:
 @router.get("/tree", response_model=list, summary="查询组织树")
 def get_org_tree(
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     context_tenant_id: str = Depends(require_context_tenant_id),
 ):
     """返回上下文租户的完整组织树（所有角色可读）"""
-    return build_tree(db, context_tenant_id)
+    return build_tree(db, current_user, context_tenant_id)
 
 
 @router.post("", response_model=OrgResponse, status_code=status.HTTP_201_CREATED, summary="创建子组织")

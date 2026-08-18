@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Plus, Edit, Delete, Rank } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Rank, Lock, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchOrgTree, createOrg, renameOrg, moveOrg, deleteOrg } from '@/api/orgs'
 import { fetchUsers } from '@/api/users'
-import type { OrgTreeNode, User } from '@/types'
+import type { NodeAuth, OrgTreeNode, User } from '@/types'
 
 /**
  * 组织管理页面（对接 FastAPI 后端）
@@ -24,10 +24,6 @@ async function loadTree(): Promise<void> {
   treeLoading.value = true
   try {
     tree.value = await fetchOrgTree()
-    // 默认选中当前用户所属组织
-    if (!selectedOrg.value && authStore.orgId) {
-      selectedOrg.value = findNode(tree.value, authStore.orgId) ?? null
-    }
   } catch {
     // 错误提示由拦截器统一处理
   } finally {
@@ -35,22 +31,16 @@ async function loadTree(): Promise<void> {
   }
 }
 
-function findNode(nodes: OrgTreeNode[], id: string): OrgTreeNode | null {
-  for (const n of nodes) {
-    if (n.id === id) return n
-    const r = findNode(n.children, id)
-    if (r) return r
-  }
-  return null
-}
-
-/** 节点是否可操作：admin 全部；manager 仅其子树内节点 */
-function canOperate(node: OrgTreeNode): boolean {
-  if (authStore.isAdmin) return true
+/** 节点的操作权限 */
+function checkAuth(node: OrgTreeNode): NodeAuth {
+  if (authStore.isAdmin) return 'manage'
   if (authStore.roleCode === 'manager') {
-    return node.path.startsWith(authStore.orgPath)
+    return node.path.startsWith(authStore.orgPath) ? 'manage' : 'none'
   }
-  return false
+  if (authStore.roleCode === 'auditor') {
+    return node.path.startsWith(authStore.orgPath) ? 'view' : 'none'
+  }
+  return node.path === authStore.orgPath ? 'view' : 'none'
 }
 
 // ---------- 节点操作 ----------
@@ -179,7 +169,11 @@ async function loadOrgUsers(): Promise<void> {
 }
 
 function handleNodeClick(node: OrgTreeNode): void {
-  selectedOrg.value = node
+  if (checkAuth(node) === 'none') {
+    selectedOrg.value = null
+  } else {
+    selectedOrg.value = node
+  }
   loadOrgUsers()
 }
 
@@ -222,7 +216,26 @@ onMounted(loadTree)
                   {{ data.userCount }}人
                 </el-tag>
               </span>
-              <span v-if="canOperate(data)" class="node-actions">
+              <span v-if="checkAuth(data) === 'view'" class="node-actions">
+                <el-button
+                  :icon="View"
+                  link
+                  size="small"
+                  title="仅查看"
+                  disabled
+                />
+              </span>
+              <span v-if="checkAuth(data) === 'none'" class="node-actions">
+                <el-button
+                  :icon="Lock"
+                  link
+                  size="small"
+                  title="无权限"
+                  disabled
+                  @click.stop.prevent
+                />
+              </span>
+              <span v-if="checkAuth(data) === 'manage'" class="node-actions">
                 <el-button
                   :icon="Plus"
                   link

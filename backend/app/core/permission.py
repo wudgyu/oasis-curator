@@ -29,6 +29,11 @@ class ScopeType(str, Enum):
     SUBTREE = "subtree"
     ORG_ONLY = "org_only"
 
+class AuthType(str, Enum):
+    MANAGE = "manage"
+    VIEW = "view"
+    LIMITED = "limited"
+    NONE = "none"
 
 @dataclass
 class DataScope:
@@ -83,6 +88,34 @@ def get_data_scope(user: User, db: Session) -> DataScope:
     # employee
     return DataScope.org_only(org_id=user.org_id or "")
 
+def check_org_auth(user: User, db: Session, org: Organization) -> AuthType:
+    """
+    检查组织授权类型：用户针对该组织的授权类型。
+    
+    - admin：可针对任意组织管理
+    - manager: 可管理所在组织及子组织
+    - auditor: 可查看所在组织及子组织
+    - employee: 仅可使用所在组织节点
+    """
+    my_org = get_user_org(user, db)
+    
+    # 如果没有所属组织，直接返回无权限
+    if my_org is None:
+        return AuthType.NONE
+
+    is_under_my_org = org.path.startswith(my_org.path)
+    is_my_org = org.path == my_org.path
+    
+    # 角色权限映射
+    role_auth_map = {
+        "admin": AuthType.MANAGE,  # admin 不受组织限制
+        "manager": AuthType.MANAGE if is_under_my_org else AuthType.NONE,
+        "auditor": AuthType.VIEW if is_under_my_org else AuthType.NONE,
+        "employee": AuthType.LIMITED if is_my_org else AuthType.NONE,
+    }
+    
+    role_code = get_role_code(user, db)
+    return role_auth_map.get(role_code, AuthType.NONE)
 
 def can_manage_org(user: User, db: Session, org: Organization) -> bool:
     """
