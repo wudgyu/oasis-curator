@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 
 from app.core.config import settings
 
@@ -61,18 +61,44 @@ PROVIDER_CONFIGS = {
         "api_key": lambda: settings.DEEPSEEK_API_KEY,
         "base_url": settings.DEEPSEEK_BASE_URL,
         "model": settings.DEEPSEEK_MODEL,
+        "stream_usage": True,  # 支持流式末尾返回 usage
     },
     "kimi": {
         "api_key": lambda: settings.KIMI_API_KEY,
         "base_url": settings.KIMI_BASE_URL,
         "model": settings.KIMI_MODEL,
+        "stream_usage": True,
     },
     "ark": {
         "api_key": lambda: settings.ARK_API_KEY,
         "base_url": settings.ARK_BASE_URL,
         "model": settings.ARK_MODEL,
+        "stream_usage": False,  # 未确认支持，默认关闭避免参数兼容问题
     },
 }
+
+# 配额耗尽类错误关键字：命中即视为不可重试，快速降级
+_QUOTA_KEYWORDS = ("quota", "balance", "billing", "额度")
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    """
+    判断错误是否值得重试。
+
+    可重试：网络抖动（超时/连接中断）、服务端 5xx、普通限流（短暂恢复）
+    不可重试：配额耗尽（数小时才重置）、鉴权失败、参数错误、上下文超限
+    """
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        # 无状态码的错误：超时、连接中断可重试，其余快速失败
+        return isinstance(error, (APIConnectionError, APITimeoutError))
+    if status_code == 429:
+        # 普通限流可退避重试；配额耗尽重试无意义
+        return not any(k in str(error).lower() for k in _QUOTA_KEYWORDS)
+    if 500 <= status_code < 600:
+        return True
+    # 其余 4xx（鉴权、参数、上下文超限等）重试无意义，直接降级
+    return False
 
 
 def _get_provider_names() -> List[str]:
@@ -131,6 +157,18 @@ class LLMProvider:
         self._provider = provider or settings.LLM_DEFAULT_PROVIDER
         self._fallback_chain = _build_fallback_chain(self._provider)
         self._clients: Dict[str, AsyncOpenAI] = {}
+        # 最近一次成功应答的 provider 与 Token 用量（降级后以实际应答模型为准）
+        self._last_provider: Optional[str] = None
+        self._last_usage: Optional[LLMUsage] = None
+
+    def _resolve_chain(self, provider: Optional[str]) -> List[str]:
+        """
+        解析调用链：显式指定 provider 时其优先但仍保留降级链；
+        未指定时使用默认降级链。
+        """
+        if not provider:
+            return self._fallback_chain
+        return [provider] + [p for p in self._fallback_chain if p != provider]
 
     # ------------------------------------------------------------------
     # 内部方法
@@ -182,16 +220,26 @@ class LLMProvider:
         last_error: Optional[Exception] = None
         for attempt in range(1, max_retries + 1):
             try:
-                response = await client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    temperature=kwargs.get("temperature", settings.LLM_TEMPERATURE),
-                    max_tokens=kwargs.get("max_tokens", settings.LLM_MAX_TOKENS),
-                    stream=stream,
-                )
+                request_params: Dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": kwargs.get("temperature", settings.LLM_TEMPERATURE),
+                    "max_tokens": kwargs.get("max_tokens", settings.LLM_MAX_TOKENS),
+                    "stream": stream,
+                }
+                # 部分模型支持在流式末尾返回 usage（需显式开启）
+                if stream and PROVIDER_CONFIGS.get(provider, {}).get("stream_usage"):
+                    request_params["stream_options"] = {"include_usage": True}
+                response = await client.chat.completions.create(**request_params)
                 return response, client, provider
             except Exception as e:
                 last_error = e
+                if not _is_retryable_error(e):
+                    # 配额耗尽/鉴权失败/参数错误等：重试无意义，快速降级
+                    logger.warning(
+                        "[%s] 调用失败（不可重试类错误，直接降级）: %s", provider, e
+                    )
+                    raise
                 if attempt < max_retries:
                     delay = base_delay * (backoff ** (attempt - 1))
                     logger.warning(
@@ -233,7 +281,7 @@ class LLMProvider:
         Returns:
             LLMResponse 包含回复内容、模型、provider、用量信息
         """
-        chain = [provider] if provider else self._fallback_chain
+        chain = self._resolve_chain(provider)
 
         last_error: Optional[Exception] = None
         for name in chain:
@@ -253,6 +301,8 @@ class LLMProvider:
                         completion_tokens=resp.usage.completion_tokens,
                         total_tokens=resp.usage.total_tokens,
                     )
+                self._last_provider = used_provider
+                self._last_usage = usage
                 return LLMResponse(
                     content=choice.message.content or "",
                     model=resp.model,
@@ -279,13 +329,18 @@ class LLMProvider:
         """
         流式对话，逐 token 产出。
 
+        降级规则：
+        - 首个 token 产出前失败 → 直接切换下一个 provider（输出不受影响）
+        - 已产出部分 token 后失败 → 终止本次调用（切换模型会造成输出混乱）
+
         Yields:
             str: 每个增量 token 的文本内容
         """
-        chain = [provider] if provider else self._fallback_chain
+        chain = self._resolve_chain(provider)
 
         last_error: Optional[Exception] = None
         for name in chain:
+            yielded = False
             try:
                 stream, _, _ = await self._call_with_retry(
                     provider=name,
@@ -294,13 +349,30 @@ class LLMProvider:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                # 流建立成功：应答模型确定为当前 provider
+                self._last_provider = name
+                self._last_usage = None
                 async for chunk in stream:
-                    delta = chunk.choices[0].delta if chunk.choices else None
+                    # 部分模型在最后一个 chunk 返回 usage
+                    if chunk.usage:
+                        self._last_usage = LLMUsage(
+                            prompt_tokens=chunk.usage.prompt_tokens,
+                            completion_tokens=chunk.usage.completion_tokens,
+                            total_tokens=chunk.usage.total_tokens,
+                        )
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
                     if delta and delta.content:
+                        yielded = True
                         yield delta.content
                 return  # 成功，退出
             except Exception as e:
                 last_error = e
+                if yielded:
+                    # 已输出部分内容，切换模型会造成输出混乱，直接终止
+                    logger.error("[%s] 流式输出中途失败，终止本次调用: %s", name, e)
+                    raise
                 logger.warning("[%s] 流式调用失败，尝试降级: %s", name, e)
                 continue
 
@@ -312,6 +384,16 @@ class LLMProvider:
     def provider(self) -> str:
         """当前默认 provider"""
         return self._provider
+
+    @property
+    def last_provider(self) -> Optional[str]:
+        """最近一次成功应答的 provider（降级后为实际应答的模型）"""
+        return self._last_provider
+
+    @property
+    def last_usage(self) -> Optional[LLMUsage]:
+        """最近一次成功应答的 Token 用量（流式响应未返回 usage 时为 None）"""
+        return self._last_usage
 
     @property
     def fallback_chain(self) -> List[str]:
