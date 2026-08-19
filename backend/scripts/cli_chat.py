@@ -57,6 +57,7 @@ class ChatSession:
         self._messages: List[dict] = []
         self._cumulative_tokens = 0
         self._round_count = 0
+        self._last_round_tokens = 0
 
         if system_prompt:
             self._messages.append({"role": "system", "content": system_prompt})
@@ -72,6 +73,19 @@ class ChatSession:
     @property
     def cumulative_tokens(self) -> int:
         return self._cumulative_tokens
+
+    @property
+    def last_round_tokens(self) -> int:
+        return self._last_round_tokens
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider_name
+
+    @property
+    def last_answer_provider(self) -> Optional[str]:
+        """最近一轮实际应答的模型（降级后为降级链上的模型）"""
+        return self._llm.last_provider
 
     def add_user_message(self, content: str) -> None:
         self._messages.append({"role": "user", "content": content})
@@ -89,13 +103,15 @@ class ChatSession:
         self._round_count += 1
         response = await self._llm.chat(self._messages)
         if response.usage:
+            self._last_round_tokens = response.usage.total_tokens
             self._cumulative_tokens += response.usage.total_tokens
         self.add_assistant_message(response.content)
         return response
 
     async def chat_stream(self):
-        """流式发送当前消息列表，逐 token 打印"""
+        """流式发送当前消息列表，逐 token 打印，并统计 Token 用量"""
         self._round_count += 1
+        self._last_round_tokens = 0
 
         # 流式输出文本
         full_content = ""
@@ -107,17 +123,23 @@ class ChatSession:
         # 流式完成后追加到消息历史
         self.add_assistant_message(full_content)
 
-        # 通过非流式调用获取 token 统计（轻量请求）
-        try:
-            stats = await self._llm.chat(
-                [{"role": "user", "content": "ping"}],
-                provider=self._llm.provider,
-                max_tokens=1,
-            )
-            if stats.usage:
-                self._cumulative_tokens += stats.usage.total_tokens
-        except Exception:
-            pass  # 统计失败不影响主流程
+        # Token 统计：优先取流式响应自带的 usage（以实际应答模型为准）
+        usage = self._llm.last_usage
+        if usage is None:
+            # 模型流式响应不含 usage 时，向实际应答模型发起轻量调用估算
+            answering = self._llm.last_provider or self._provider_name
+            try:
+                stats = await self._llm.chat(
+                    [{"role": "user", "content": "ping"}],
+                    provider=answering,
+                    max_tokens=1,
+                )
+                usage = stats.usage
+            except Exception:
+                pass  # 统计失败不影响主流程
+        if usage:
+            self._last_round_tokens = usage.total_tokens
+            self._cumulative_tokens += usage.total_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +244,15 @@ async def run_repl(
 
         print()  # 换行
 
-        # 打印 token 统计
-        print(f"{Colors.GRAY}[本轮 #{session.round_count} · 累计 ~{session.cumulative_tokens} tokens]{Colors.RESET}")
+        # 打印 token 统计（降级时标注实际应答模型）
+        stats = f"[本轮 #{session.round_count}"
+        answered_by = session.last_answer_provider
+        if answered_by and answered_by != session.provider_name:
+            stats += f" · 降级至 {answered_by}"
+        if session.last_round_tokens:
+            stats += f" · 本轮 ~{session.last_round_tokens} tokens"
+        stats += f" · 累计 ~{session.cumulative_tokens} tokens]"
+        print(f"{Colors.GRAY}{stats}{Colors.RESET}")
         print()
 
 
