@@ -4,6 +4,7 @@
 通过环境变量覆盖默认值，开发环境使用 .env 文件
 """
 
+from typing import Optional
 from pydantic_settings import BaseSettings
 
 
@@ -20,6 +21,34 @@ class Settings(BaseSettings):
 
     # 数据库
     DATABASE_URL: str = "sqlite:///ai_platform.db"
+
+    # ========== LLM 配置 ==========
+    # DeepSeek
+    DEEPSEEK_API_KEY: Optional[str] = None
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_MODEL: str = "deepseek-chat"
+
+    # Kimi (Moonshot)
+    KIMI_API_KEY: Optional[str] = None
+    KIMI_BASE_URL: str = "https://api.moonshot.cn/v1"
+    KIMI_MODEL: str = "moonshot-v1-8k"
+
+    # Ark (火山方舟)
+    ARK_API_KEY: Optional[str] = None
+    ARK_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
+    ARK_MODEL: str = "deepseek-v3-250324"
+
+    # 默认 provider 与降级链
+    LLM_DEFAULT_PROVIDER: str = "deepseek"
+    LLM_FALLBACK_PROVIDERS: str = "kimi,ark"
+
+    # 请求参数
+    LLM_TEMPERATURE: float = 0.7
+    LLM_MAX_TOKENS: int = 4096
+    LLM_MAX_RETRIES: int = 3
+    LLM_RETRY_BASE_DELAY: float = 1.0
+    LLM_RETRY_BACKOFF: float = 2.0
+    LLM_REQUEST_TIMEOUT: int = 60
 
     class Config:
         env_file = ".env"
