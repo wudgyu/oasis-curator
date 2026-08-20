@@ -22,6 +22,7 @@ from app.api.tenants import router as tenants_router
 from app.api.orgs import router as orgs_router
 from app.api.users import router as users_router
 from app.api.roles import router as roles_router
+from app.api.iam_config import router as iam_router
 
 
 @asynccontextmanager
@@ -53,6 +54,7 @@ app.include_router(tenants_router)
 app.include_router(orgs_router)
 app.include_router(users_router)
 app.include_router(roles_router)
+app.include_router(iam_router)
 
 
 @app.get("/api/health")
