@@ -139,3 +139,18 @@ export interface UserInfo {
   /** 平台管理员为 null */
   org: OrgBrief | null
 }
+
+/** IAM 配置生成器 */
+export interface IamTemplate {
+  name: string
+  description: string
+  keywords: string[]
+}
+
+export interface IamGenerateResult {
+  config: Record<string, unknown>
+  template_matched: boolean
+  template_name: string | null
+  retries: number
+  conflicts: string[]
+}

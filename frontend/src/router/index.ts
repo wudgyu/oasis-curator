@@ -44,6 +44,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/UserManagement.vue'),
         meta: { title: '用户管理' },
       },
+      {
+        path: 'iam-config',
+        name: 'IamConfigGenerator',
+        component: () => import('@/views/IamConfigGenerator.vue'),
+        meta: { title: 'IAM 配置生成', requiresAdmin: true },
+      },
     ],
   },
 ]

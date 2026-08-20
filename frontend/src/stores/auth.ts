@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { RoleCode, TenantBrief, OrgBrief } from '@/types'
 import * as authApi from '@/api/auth'
-import { ro } from 'element-plus/es/locales.mjs'
 
 /**
  * 认证授权 Store（RBAC 模型）
