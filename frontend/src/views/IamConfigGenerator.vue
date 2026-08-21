@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, DocumentChecked, CopyDocument } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
-import { fetchIamTemplates, generateIamRole } from '@/api/iam'
+import { fetchIamTemplates, generateIamRole, saveIamRole } from '@/api/iam'
 import type { IamGenerateResult, IamTemplate } from '@/types'
 
 /**
@@ -15,12 +16,17 @@ import type { IamGenerateResult, IamTemplate } from '@/types'
  * - Schema 校验失败自动重试（后端处理）
  * - 同名角色冲突提示
  * - JSON 预览 + 语法高亮
+ * - 确认提交 → 持久化到数据库
  */
 
 const requirement = ref('')
 const templates = ref<IamTemplate[]>([])
 const result = ref<IamGenerateResult | null>(null)
 const generating = ref(false)
+const saving = ref(false)
+const saved = ref(false)
+
+const router = useRouter()
 
 const configJson = computed(() => (result.value ? JSON.stringify(result.value.config, null, 2) : ''))
 
@@ -67,15 +73,48 @@ async function handleGenerate(): Promise<void> {
   }
 }
 
-/** 确认提交（复制 JSON 到剪贴板，实际入库由后续角色管理功能承接） */
+/** 确认提交（保存角色配置到数据库） */
 async function handleConfirm(): Promise<void> {
   if (!result.value) return
-  await ElMessageBox.confirm(
-    '确认将此角色配置提交到当前租户？',
-    '提交确认',
-    { type: 'info', confirmButtonText: '确认提交', cancelButtonText: '取消' },
-  )
-  ElMessage.success('角色配置已提交（当前版本支持复制，入库由角色管理功能承接）')
+
+  const roleName = (result.value.config as Record<string, unknown>).role as Record<string, string> | undefined
+  const displayName = roleName?.name ?? '未命名角色'
+
+  try {
+    await ElMessageBox.confirm(
+      `确认将角色「${displayName}」提交到当前租户？`,
+      '提交确认',
+      { type: 'info', confirmButtonText: '确认提交', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+
+  saving.value = true
+  try {
+    const overwrite = conflicts.value.length > 0
+    const saveResult = await saveIamRole(result.value.config, overwrite)
+    saved.value = true
+    if (saveResult.overwritten) {
+      ElMessage.success(`角色「${saveResult.name}」已覆盖更新`)
+    } else {
+      ElMessage.success(`角色「${saveResult.name}」已保存到数据库`)
+    }
+  } catch (e: unknown) {
+    const err = e as { response?: { status?: number; data?: { detail?: string } } }
+    if (err?.response?.status === 409) {
+      ElMessage.error('角色编码冲突，请修改需求后重新生成，或勾选覆盖选项')
+    } else {
+      ElMessage.error('保存失败，请稍后重试')
+    }
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 导航到角色管理页面 */
+function goToRoles(): void {
+  router.push('/roles')
 }
 
 /** 复制 JSON 到剪贴板 */
@@ -162,9 +201,19 @@ async function handleCopy(): Promise<void> {
 
       <div class="result-actions">
         <el-button :icon="CopyDocument" @click="handleCopy">复制 JSON</el-button>
-        <el-button type="primary" :icon="DocumentChecked" @click="handleConfirm">
-          确认提交
+        <el-button
+          v-if="!saved"
+          type="primary"
+          :icon="DocumentChecked"
+          :loading="saving"
+          @click="handleConfirm"
+        >
+          {{ saving ? '保存中…' : '确认提交' }}
         </el-button>
+        <template v-else>
+          <el-tag type="success" size="large">已保存</el-tag>
+          <el-button type="primary" plain @click="goToRoles">查看角色列表</el-button>
+        </template>
       </div>
     </el-card>
   </div>

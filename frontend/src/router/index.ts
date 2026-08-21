@@ -50,6 +50,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/IamConfigGenerator.vue'),
         meta: { title: 'IAM 配置生成', requiresAdmin: true },
       },
+      {
+        path: 'roles',
+        name: 'RoleManagement',
+        component: () => import('@/views/RoleManagement.vue'),
+        meta: { title: '角色管理', requiresAdmin: true },
+      },
     ],
   },
 ]

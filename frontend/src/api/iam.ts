@@ -1,5 +1,10 @@
 import request from '@/utils/request'
-import type { IamGenerateResult, IamTemplate } from '@/types'
+import type {
+  IamGenerateResult,
+  IamRoleItem,
+  IamSaveRoleResult,
+  IamTemplate,
+} from '@/types'
 
 /**
  * IAM 配置生成 API
@@ -20,4 +25,27 @@ export async function generateIamRole(
     requirement,
   })
   return data
+}
+
+/** 保存生成的 IAM 角色配置到数据库 */
+export async function saveIamRole(
+  config: Record<string, unknown>,
+  overwrite = false,
+): Promise<IamSaveRoleResult> {
+  const { data } = await request.post<IamSaveRoleResult>('/iam/save-role', {
+    config,
+    overwrite,
+  })
+  return data
+}
+
+/** 查询角色列表（内置 + 当前租户自定义） */
+export async function fetchIamRoles(): Promise<IamRoleItem[]> {
+  const { data } = await request.get<IamRoleItem[]>('/iam/roles')
+  return data
+}
+
+/** 删除自定义角色 */
+export async function deleteIamRole(roleId: string): Promise<void> {
+  await request.delete(`/iam/roles/${roleId}`)
 }

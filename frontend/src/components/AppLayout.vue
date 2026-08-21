@@ -9,6 +9,7 @@ import {
   Share,
   SwitchButton,
   MagicStick,
+  DocumentChecked,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchTenants } from '@/api/tenants'
@@ -32,6 +33,7 @@ const menuItems: MenuItem[] = [
   { path: '/orgs', title: '组织管理', icon: Share },
   { path: '/users', title: '用户管理', icon: UserFilled },
   { path: '/iam-config', title: 'IAM 配置生成', icon: MagicStick, adminOnly: true },
+  { path: '/roles', title: '角色管理', icon: DocumentChecked, adminOnly: true },
 ]
 
 /** 根据角色过滤菜单：租户管理仅 admin 可见 */

@@ -154,3 +154,24 @@ export interface IamGenerateResult {
   retries: number
   conflicts: string[]
 }
+
+/** IAM 角色保存 */
+export interface IamSaveRoleResult {
+  id: string
+  code: string
+  name: string
+  overwritten: boolean
+}
+
+/** IAM 角色列表项（含内置 + 自定义） */
+export interface IamRoleItem {
+  id: string
+  code: string
+  name: string
+  description: string | null
+  builtin: boolean
+  tenant_id: string | null
+  permissions: Array<{ resource: string; actions: string[] }> | null
+  data_scope: Record<string, unknown> | null
+  created_at: string
+}
