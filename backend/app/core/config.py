@@ -51,17 +51,22 @@ class Settings(BaseSettings):
     LLM_REQUEST_TIMEOUT: int = 60
 
     # ========== Embedding 配置 ==========
-    # 向量化模型选择：auto = 有智谱 Key 用云端 embedding-2，否则本地 MiniLM
+    # 向量化模型选择（auto 优先级：智谱 embedding-2 > Ollama bge-m3 > 本地 MiniLM）
     EMBEDDING_PROVIDER: str = "auto"
     ZHIPU_API_KEY: Optional[str] = None
     ZHIPU_EMBEDDING_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
     ZHIPU_EMBEDDING_MODEL: str = "embedding-2"
+    OLLAMA_HOST: str = "http://localhost:11434"
+    OLLAMA_EMBED_MODEL: str = "bge-m3"
 
     # ========== 向量数据库（ChromaDB） ==========
     CHROMA_HOST: str = "localhost"
     CHROMA_PORT: int = 18000
     CHROMA_TENANT: str = "curator"  # 项目命名空间
     CHROMA_DATABASE: str = "oasis"  # 向量库
+
+    # ========== 文档上传 ==========
+    UPLOAD_DIR: str = "./data/uploads"  # 上传文档的落盘目录（相对 backend 运行目录）
 
     class Config:
         env_file = ".env"

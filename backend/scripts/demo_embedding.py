@@ -44,9 +44,9 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Embedding 相似度演示")
     parser.add_argument(
         "--provider",
-        choices=["auto", "zhipu", "minilm"],
+        choices=["auto", "zhipu", "ollama", "minilm"],
         default="auto",
-        help="Embedding 模型选择（默认 auto）",
+        help="Embedding 模型选择（默认 auto：智谱 > Ollama bge-m3 > MiniLM）",
     )
     args = parser.parse_args()
 
