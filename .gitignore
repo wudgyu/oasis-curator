@@ -191,5 +191,8 @@ frontend/.vite/
 # 即便 .gitignore 规则变更，下面的文件也不会被忽略
 !backend/requirements.txt
 !backend/requirements-*.txt
+!backend/data/
+!backend/data/samples/
+!backend/data/samples/**
 !frontend/.npmrc
 !frontend/.nvmrc
