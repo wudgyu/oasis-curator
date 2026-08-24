@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { Plus, Edit, Delete, Rank, Lock, View } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchOrgTree, createOrg, renameOrg, moveOrg, deleteOrg } from '@/api/orgs'
@@ -182,6 +182,17 @@ const roleLabelMap: Record<string, string> = {
   auditor: '审计员',
   employee: '员工',
 }
+
+// admin 切换租户工作区后自动刷新组织树
+watch(
+  () => authStore.currentTenantId,
+  (newId) => {
+    if (!authStore.isLoggedIn || !newId) return
+    selectedOrg.value = null
+    orgUsers.value = []
+    loadTree()
+  },
+)
 
 // ---------- 初始化 ----------
 onMounted(loadTree)
