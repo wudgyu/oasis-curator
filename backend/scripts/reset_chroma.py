@@ -42,7 +42,8 @@ def main() -> None:
         database=settings.CHROMA_DATABASE,
     )
 
-    existing = client.list_collections()
+    # chroma 1.x 的 list_collections 返回 Collection 对象列表
+    existing = [c.name for c in client.list_collections()]
     if COLLECTION_NAME in existing:
         client.delete_collection(COLLECTION_NAME)
         print(f"已删除 collection: {COLLECTION_NAME}")
