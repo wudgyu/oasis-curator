@@ -127,8 +127,9 @@ class VectorStore:
     def _collection_dimension(self) -> int:
         """取集合当前向量维度（空集合返回 0）"""
         res = self._collection.get(limit=1, include=["embeddings"])
-        if res.get("embeddings"):
-            return len(res["embeddings"][0])
+        embeddings = res.get("embeddings")
+        if embeddings is not None and len(embeddings) > 0 and embeddings[0] is not None:
+            return len(embeddings[0])
         return 0
 
     @staticmethod

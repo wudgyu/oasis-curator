@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        # .env 允许包含尚未实现的预留变量（如 LOG_LEVEL / BACKEND_PORT），忽略即可
+        extra = "ignore"
 
 
 settings = Settings()

@@ -102,6 +102,9 @@ async def upload_document(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="文档解析结果为空，无法入库",
             )
+        # 引用溯源展示原始文件名（落盘文件名是 doc_id 命名）
+        for c in chunks:
+            c.source_file = file.filename or "unnamed"
 
         embeddings = await embedder.embed_texts([c.text for c in chunks])
         await asyncio.to_thread(
