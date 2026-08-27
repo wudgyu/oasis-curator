@@ -50,15 +50,15 @@ Oasis Curator 的存在，是为了**让用户少翻几页、少点几次链接�
 
 ### 🏛️ Knowledge Preserved — 知识有归
 
-- 📄 **多格式文档入库**：PDF、Word、Markdown、TXT 一键上传，自动解析切分
-- 🔒 **多租户物理隔离**：每个租户独立向量 Collection，API 层 + 存储层双重防护
-- 🛡️ **细粒度权限控制**：文档可见性三级管理（租户公开 / 仅本人 / 指定角色）
+- 📄 **多格式文档入库**：PDF、TXT、Markdown 一键上传，自动解析切分（Word 支持规划中）
+- 🔒 **多租户数据隔离**：向量元数据租户过滤 + API 层双重防护
+- 🛡️ **细粒度权限控制**：文档可见性三级管理（租户公开 / 仅本人 / 指定角色）规划中
 - 🔑 **统一认证授权**：JWT + RBAC 2.0，支持多端登录与 API Key 管理
 
 ### 📚 Context Curated — 脉络可循
 
-- 🧩 **智能文档切分**：按段落 + 字符滑窗，保留语义边界
-- 🔍 **语义检索 + 重排序**：Embedding 召回 Top-K，LLM 重排序取 Top-N
+- 🧩 **智能文档切分**：按段落 + 字符滑窗（重叠 100），保留语义边界
+- 🔍 **语义检索 + 重排序**：Embedding 召回 Top-5，LLM 打分重排序取 Top-3
 - 🤖 **文档处理 Agent**：上传混合文档（中英/含表格），LLM 自主编排解析/翻译/摘要/入库
 - 🧠 **多 Agent 质量保障**：检索 → 生成 → 验证 → 融合，逐句防幻觉，置信度分级输出
 
@@ -68,6 +68,12 @@ Oasis Curator 的存在，是为了**让用户少翻几页、少点几次链接�
 - 🎯 **自然语言配权**：IAM 配置生成器，自然语言 → RBAC 权限配置 JSON
 - 🔌 **MCP 标准化接入**：将文档检索和问答能力暴露为 MCP 工具，对接 Agent 生态
 - 🌗 **双模式部署**：云端（DeepSeek/Kimi）+ 离线（Ollama + Qwen + BGE）
+
+> ✅ **RAG 后端管线（v0.4 前半）已完成**：文档上传 → 解析 → 切分 → Embedding
+> （智谱 embedding-2 / Ollama bge-m3 / MiniLM 自动选择）→ ChromaDB 入库 →
+> 检索 → LLM 重排序 → 生成带 `[来源: 文件名, 第N段]` 引用，文档外问题明确拒答。
+> 评估脚本实测：召回率 100%、答案质量 100%、引用正确率 80%、多租户隔离 10/10。
+> 前端文档上传页与问答页随 v0.4 后半（Day 26-27）交付。
 
 ---
 
@@ -119,11 +125,11 @@ graph TB
 |------|----------|
 | 前端 | Vue 3 · TypeScript · Element Plus · Pinia · pnpm |
 | 后端 | Python 3.11+ · FastAPI · Pydantic · SQLAlchemy |
-| AI 编排 | LangChain · LangGraph · Function Calling |
-| 向量库 | Milvus Lite · ChromaDB |
-| LLM | DeepSeek · Kimi · Qwen 2.5（离线） |
-| Embedding | 智谱 Embedding · BGE-large-zh（离线） |
-| 协议 | MCP (Model Context Protocol) |
+| AI 编排 | 手写 RAG 管线 · LangGraph / Function Calling（规划） |
+| 向量库 | ChromaDB（Docker 服务端）· Milvus（规划） |
+| LLM | DeepSeek · Kimi · Ark（多模型路由自动降级） |
+| Embedding | 智谱 embedding-2 · Ollama bge-m3 · MiniLM（自动选择） |
+| 协议 | MCP (Model Context Protocol)（规划） |
 | 部署 | Docker · Docker Compose · SQLite/PostgreSQL |
 
 ---
@@ -174,18 +180,35 @@ open http://localhost:5173
 ### 🛠️ 本地开发
 
 ```bash
-# 1. 后端（初始化种子数据 + 启动服务）
+# 1. 后端：创建虚拟环境并安装依赖（必须使用项目 venv，勿用系统 Python）
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-python seed.py                      # 初始化测试数据（3 租户 + 5 用户）
-uvicorn app.main:app --reload
 
-# 2. 前端（使用 pnpm，API 请求经 Vite 代理转发至 :8000）
-cd frontend
+# 2. 配置环境变量（LLM API Key 等；.env 已在 .gitignore 中）
+cp ../.env.example .env
+# 编辑 .env，填入 DEEPSEEK_API_KEY / KIMI_API_KEY / ZHIPU_API_KEY
+
+# 3. 启动 ChromaDB 向量库（Docker，容器内 8000 映射到宿主机 18000）
+docker run -d --name chromadb --restart unless-stopped -p 18000:8000 chromadb/chroma
+
+# 4. 初始化 ChromaDB 命名空间（tenant=curator / database=oasis，幂等可重复执行）
+python scripts/init_chroma.py
+
+# 5. 初始化种子数据并启动服务
+python seed.py                      # 初始化测试数据（3 租户 + 5 用户）
+uvicorn app.main:app --reload       # 或 .venv/bin/uvicorn app.main:app --reload
+
+# 6. 前端（使用 pnpm，API 请求经 Vite 代理转发至 :8000）
+cd ../frontend
 pnpm install
 pnpm dev
 ```
+
+> ⚠️ **常见坑：未用虚拟环境启动后端**。项目依赖（chromadb / pdfplumber 等）只安装在
+> `backend/.venv` 中，若误用系统 Python 运行 `uvicorn`，应用会因缺少依赖反复加载失败，
+> 8000 端口上没有真实服务，前端表现为 `/api` 请求 **502**。务必先
+> `source .venv/bin/activate`，或直接使用 `.venv/bin/uvicorn`。
 
 访问 `http://localhost:5173`，使用测试账号登录：
 
@@ -272,15 +295,24 @@ oasis-curator/
 │   │   │   ├── tenants.py            # 租户 CRUD（admin，自动建根组织）
 │   │   │   ├── orgs.py               # 组织树 CRUD（移动防环 + 空组织删除约束）
 │   │   │   ├── users.py              # 用户 CRUD（角色数据范围 + 根组织 manager 保底）
-│   │   │   └── roles.py              # 可分配角色列表
+│   │   │   ├── roles.py              # 可分配角色列表
+│   │   │   ├── documents.py          # 文档上传（解析→切分→向量化入库）/ 列表 / 删除 / 语义检索
+│   │   │   └── qa.py                 # RAG 问答（检索→重排序→生成带引用）
 │   │   ├── core/             # 核心模块
-│   │   │   ├── config.py             # pydantic-settings 配置
+│   │   │   ├── config.py             # pydantic-settings 配置（LLM / Embedding / Chroma / 上传）
 │   │   │   ├── security.py           # JWT 签发/校验 + bcrypt 密码哈希
-│   │   │   └── permission.py         # RBAC 权限判定层（DataScope + 子树校验 + 组织移动）
-│   │   ├── models/           # SQLAlchemy 模型（tenants / organizations / roles / users）
+│   │   │   ├── permission.py         # RBAC 权限判定层（DataScope + 子树校验 + 组织移动）
+│   │   │   ├── llm_provider.py       # LLM 多模型路由（DeepSeek/Kimi/Ark + 自动降级 + 流式）
+│   │   │   ├── doc_parser.py         # 文档解析（PDF 逐页提取 / TXT / Markdown，编码自适应）
+│   │   │   ├── chunker.py            # 文档切分（固定字符滑窗 / 按段落合并，来源与页码标注）
+│   │   │   ├── embedder.py           # Embedding（智谱 embedding-2 / Ollama bge-m3 / MiniLM）
+│   │   │   ├── vector_store.py       # ChromaDB 封装（元数据租户过滤 + 余弦距离）
+│   │   │   └── rag_pipeline.py       # 手写 RAG 管线（检索→LLM 重排序→拒答门控→生成引用）
+│   │   ├── models/           # SQLAlchemy 模型（tenants / organizations / roles / users / documents）
 │   │   ├── schemas/          # Pydantic 请求/响应模型
 │   │   └── main.py           # 应用入口（自动建表 + CORS）
-│   ├── scripts/              # 权限矩阵自测脚本（组织 21 例 + 用户 24 例）
+│   ├── scripts/              # 自测与工具脚本（test_* / init_chroma / reset_chroma / demo_* / rag_chat / eval_rag）
+│   ├── data/samples/         # 示例产品手册（Markdown 源 + PDF 生成脚本）
 │   ├── seed.py               # 种子数据（平台管理员 + 3 租户 + 组织树 + 演示用户）
 │   └── requirements.txt
 │
@@ -301,7 +333,7 @@ oasis-curator/
 - [x] **v0.1** · 认证授权底座（多租户 + RBAC + JWT）✅ 已完成
 - [x] **v0.2** · LLM 多模型路由（DeepSeek / Kimi / Ark）✅ 已完成
 - [x] **v0.3** · IAM 配置生成器（自然语言 → 权限配置 → 入库管理）✅ 已完成
-- [ ] **v0.4** · RAG 文档问答（多租户隔离 + 引用溯源）
+- [ ] **v0.4** · RAG 文档问答（后端管线 ✅ 已完成；前端集成进行中）
 - [ ] **v0.5** · 文档处理 Agent（Function Calling 自主编排）
 - [ ] **v0.6** · 多 Agent 质量保障（LangGraph 防幻觉）
 - [ ] **v0.7** · MCP 文档服务（标准化工具接入）
