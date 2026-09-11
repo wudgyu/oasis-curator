@@ -31,7 +31,10 @@ TOP_K_RERANK = 3
 MIN_RERANK_SCORE = 4
 
 # 引用标注解析：[来源: 文件名, 第N段]
-CITATION_RE = re.compile(r"\[来源[:：]\s*([^,\]\[]+),\s*第(\d+)段\]")
+# 标点与空格需宽容：模型输出常用全角「，」「：」，段号两侧也可能带空格
+CITATION_RE = re.compile(
+    r"\[来源[:：]\s*([^,，\]\[]+?)\s*[,，]\s*第\s*(\d+)\s*段\]"
+)
 
 # 拒答话术
 REFUSE_ANSWER = "抱歉，当前文档库中没有相关信息。"

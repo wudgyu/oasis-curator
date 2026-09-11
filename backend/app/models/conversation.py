@@ -54,6 +54,8 @@ class ChatMessage(Base):
     refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # 引用来源：["文件名, 第N段", ...]
     citations: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    # 重排序保留的候选块（含原文片段），供前端点击引用时展示原文
+    sources: Mapped[Optional[List[dict]]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

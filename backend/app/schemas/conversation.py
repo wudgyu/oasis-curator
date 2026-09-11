@@ -26,6 +26,16 @@ class ConversationItem(BaseModel):
     updated_at: datetime
 
 
+class MessageSource(BaseModel):
+    """消息引用的原文片段（重排序保留的候选块）"""
+
+    score: int = Field(description="重排序打分 1-10")
+    text: str = Field(description="文本块内容（截断）")
+    source_file: str
+    chunk_index: int
+    page: Optional[int] = None
+
+
 class MessageItem(BaseModel):
     """消息单项"""
 
@@ -34,6 +44,9 @@ class MessageItem(BaseModel):
     content: str
     refused: bool = Field(default=False, description="助手是否判定文档中无答案")
     citations: List[str] = Field(default_factory=list, description="引用来源")
+    sources: List[MessageSource] = Field(
+        default_factory=list, description="引用对应的原文片段（点击引用时展示）"
+    )
     created_at: datetime
 
 

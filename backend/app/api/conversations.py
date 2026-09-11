@@ -23,6 +23,7 @@ from app.schemas.conversation import (
     ConversationDetail,
     ConversationItem,
     MessageItem,
+    MessageSource,
 )
 
 router = APIRouter(prefix="/api/qa/conversations", tags=["问答会话"])
@@ -51,6 +52,7 @@ def _message_to_item(msg: ChatMessage) -> MessageItem:
         content=msg.content,
         refused=msg.refused,
         citations=msg.citations or [],
+        sources=[MessageSource(**s) for s in (msg.sources or [])],
         created_at=msg.created_at,
     )
 

@@ -140,6 +140,7 @@ async def ask_stream(
         answer_text = ""
         refused = False
         citations: list[str] = []
+        sources: list[dict] = []
         parts: list[str] = []
         try:
             async for event in rag_pipeline.answer_stream(
@@ -149,6 +150,8 @@ async def ask_stream(
                 visibility_filter=make_chunk_filter(user_id, role_code),
             ):
                 if event["type"] == "meta":
+                    # 候选块随消息落库，供历史消息点击引用时展示原文
+                    sources = event["reranked"]
                     yield _sse(
                         "meta",
                         {
@@ -190,6 +193,7 @@ async def ask_stream(
                             content=final_text,
                             refused=refused,
                             citations=citations,
+                            sources=sources,
                         )
                     )
                     conv = (
