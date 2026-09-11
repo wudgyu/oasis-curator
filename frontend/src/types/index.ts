@@ -224,3 +224,50 @@ export interface SearchChunk {
   page: number | null
   docId: string
 }
+
+// ==================== 文档问答（会话与流式） ====================
+
+/** 会话列表项（对接 /api/qa/conversations） */
+export interface ConversationItem {
+  id: string
+  title: string
+  messageCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 引用对应的原文片段 */
+export interface MessageSource {
+  score: number
+  text: string
+  sourceFile: string
+  chunkIndex: number
+  page: number | null
+}
+
+/** 会话内消息 */
+export interface ChatMessageItem {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  refused: boolean
+  citations: string[]
+  sources: MessageSource[]
+  createdAt: string
+}
+
+/** 会话详情 */
+export interface ConversationDetail {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: ChatMessageItem[]
+}
+
+/** 流式提问参数 */
+export interface StreamAskPayload {
+  question: string
+  conversationId?: string | null
+  docId?: string | null
+}

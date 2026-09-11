@@ -51,6 +51,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '文档管理' },
       },
       {
+        path: 'qa',
+        name: 'DocQA',
+        component: () => import('@/views/DocQA.vue'),
+        meta: { title: '文档问答' },
+      },
+      {
         path: 'iam-config',
         name: 'IamConfigGenerator',
         component: () => import('@/views/IamConfigGenerator.vue'),
