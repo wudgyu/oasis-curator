@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from app.core.config import settings
 from app.core.embedder import embedder
@@ -102,11 +102,17 @@ class RagPipeline:
         tenant_id: str,
         top_k: int = TOP_K_RETRIEVAL,
         doc_id: Optional[str] = None,
+        visibility_filter: Optional[Callable[[dict], bool]] = None,
     ) -> List[SearchResult]:
-        """问题向量化 → 向量检索 Top-K（强制租户过滤）"""
+        """问题向量化 → 向量检索 Top-K（强制租户过滤 + 可见性过滤）"""
         query_embedding = (await self._embedder.embed_texts([question]))[0]
         results = await asyncio.to_thread(
-            self._store.search, query_embedding, tenant_id, top_k, doc_id
+            self._store.search,
+            query_embedding,
+            tenant_id,
+            top_k,
+            doc_id,
+            visibility_filter,
         )
         logger.info("检索完成: %d 条命中", len(results))
         return results
@@ -248,6 +254,7 @@ class RagPipeline:
         top_k: int = TOP_K_RETRIEVAL,
         top_n: int = TOP_K_RERANK,
         doc_id: Optional[str] = None,
+        visibility_filter: Optional[Callable[[dict], bool]] = None,
     ) -> RagAnswer:
         """
         完整 RAG 问答：检索 → 重排序 → 生成（含拒答判定）。
@@ -258,8 +265,9 @@ class RagPipeline:
             top_k: 向量检索返回条数
             top_n: 重排序保留条数
             doc_id: 可选，限定单文档检索
+            visibility_filter: 可选，文档可见性谓词（不传则不做文档级权限过滤）
         """
-        results = await self.retrieve(question, tenant_id, top_k, doc_id)
+        results = await self.retrieve(question, tenant_id, top_k, doc_id, visibility_filter)
         reranked = await self.rerank(question, results, top_n)
 
         base = RagAnswer(

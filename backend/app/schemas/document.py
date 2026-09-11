@@ -29,6 +29,11 @@ class DocumentItem(BaseModel):
     file_size: int
     chunk_count: int
     chunk_strategy: str
+    visibility: str = Field(description="可见性：tenant / private / roles")
+    allowed_roles: List[str] = Field(
+        default_factory=list, description="visibility=roles 时的可见角色编码"
+    )
+    is_owner: bool = Field(description="当前用户是否为上传者（决定能否删除）")
     created_at: datetime
 
 

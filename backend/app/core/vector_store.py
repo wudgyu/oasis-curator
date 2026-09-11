@@ -11,7 +11,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 
 from app.core import _sqlite_compat  # noqa: F401  必须在 import chromadb 之前
 from app.core.chunker import Chunk
@@ -22,6 +22,9 @@ import chromadb
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "documents"
+
+# 可见性过滤在召回后判定，按此倍数超采样，减少过滤导致的候选不足
+OVERSAMPLE_FACTOR = 3
 
 
 @dataclass
@@ -88,6 +91,9 @@ class VectorStore:
         embeddings: List[List[float]],
         doc_id: str,
         tenant_id: str,
+        visibility: str = "tenant",
+        uploader_id: str = "",
+        allowed_roles: str = "",
     ) -> None:
         """
         批量写入 chunk 向量 + 元数据。
@@ -97,6 +103,9 @@ class VectorStore:
             embeddings: 与 chunks 一一对应的向量
             doc_id: 文档 ID（业务表 documents.id）
             tenant_id: 所属租户（检索时的隔离依据）
+            visibility: 可见性（tenant / private / roles），检索时按此过滤
+            uploader_id: 上传者 ID（private 可见性判定）
+            allowed_roles: roles 可见性下的角色编码（逗号分隔）
         """
         if len(chunks) != len(embeddings):
             raise ValueError(
@@ -110,7 +119,12 @@ class VectorStore:
                 ids=[f"{doc_id}:{c.chunk_index}" for c in chunks],
                 embeddings=embeddings,
                 documents=[c.text for c in chunks],
-                metadatas=[self._build_metadata(c, doc_id, tenant_id) for c in chunks],
+                metadatas=[
+                    self._build_metadata(
+                        c, doc_id, tenant_id, visibility, uploader_id, allowed_roles
+                    )
+                    for c in chunks
+                ],
             )
         except Exception as e:
             # 维度不匹配：Embedding 模型已切换（如 MiniLM 384 → bge-m3 1024）
@@ -133,7 +147,14 @@ class VectorStore:
         return 0
 
     @staticmethod
-    def _build_metadata(chunk: Chunk, doc_id: str, tenant_id: str) -> dict:
+    def _build_metadata(
+        chunk: Chunk,
+        doc_id: str,
+        tenant_id: str,
+        visibility: str = "tenant",
+        uploader_id: str = "",
+        allowed_roles: str = "",
+    ) -> dict:
         """Chroma 元数据不允许 None 值，page 按需写入"""
         meta = {
             "tenant_id": tenant_id,
@@ -141,6 +162,9 @@ class VectorStore:
             "source_file": chunk.source_file,
             "chunk_index": chunk.chunk_index,
             "strategy": chunk.strategy,
+            "visibility": visibility,
+            "uploader_id": uploader_id,
+            "allowed_roles": allowed_roles,
         }
         if chunk.page is not None:
             meta["page"] = chunk.page
@@ -156,15 +180,18 @@ class VectorStore:
         tenant_id: str,
         top_k: int = 5,
         doc_id: Optional[str] = None,
+        visibility_filter: Optional[Callable[[Dict], bool]] = None,
     ) -> List[SearchResult]:
         """
-        语义检索 Top-K，强制按租户过滤（可再限定单文档）。
+        语义检索 Top-K，强制按租户过滤（可再限定单文档、按可见性过滤）。
 
         Args:
             query_embedding: 问题向量
-            tenant_id: 租户过滤条件（必传）
+            tenant_id: 租户过滤条件（必传，向量库层硬隔离）
             top_k: 返回条数
             doc_id: 可选，限定在指定文档内检索
+            visibility_filter: 可选，作用于 chunk 元数据的可见性谓词
+                （文档级权限在应用层判定，见 core/doc_permission.py）
 
         Returns:
             按相似度降序的命中列表
@@ -174,9 +201,12 @@ class VectorStore:
         if doc_id:
             where = {"$and": [{"tenant_id": tenant_id}, {"doc_id": doc_id}]}
 
+        # 可见性过滤发生在召回之后，超采样避免过滤后候选不足
+        fetch_k = top_k * OVERSAMPLE_FACTOR if visibility_filter else top_k
+
         res = self._collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
+            n_results=fetch_k,
             where=where,
             include=["documents", "metadatas", "distances"],
         )
@@ -187,6 +217,8 @@ class VectorStore:
         distances = res.get("distances") or [[]]
         for text, meta, distance in zip(docs[0], metas[0], distances[0]):
             if meta is None:
+                continue
+            if visibility_filter is not None and not visibility_filter(meta):
                 continue
             results.append(
                 SearchResult(
@@ -199,6 +231,8 @@ class VectorStore:
                     tenant_id=meta["tenant_id"],
                 )
             )
+            if len(results) >= top_k:
+                break
         return results
 
     # ------------------------------------------------------------------

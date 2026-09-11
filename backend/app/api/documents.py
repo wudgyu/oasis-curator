@@ -25,6 +25,12 @@ from app.api.auth import get_current_user
 from app.core.chunker import chunk_document
 from app.core.config import settings
 from app.core.doc_parser import SUPPORTED_EXTENSIONS, parse_file
+from app.core.doc_permission import (
+    can_access,
+    make_chunk_filter,
+    role_list,
+    validate_visibility,
+)
 from app.core.embedder import embedder
 from app.core.permission import get_role_code
 from app.core.vector_store import vector_store
@@ -75,14 +81,23 @@ def _save_upload(file: UploadFile, doc_id: str, ext: str) -> Path:
 
 @router.post("", response_model=DocumentUploadResponse, summary="上传文档并向量化入库")
 async def upload_document(
-    file: UploadFile = File(..., description="PDF/TXT/Markdown 文档"),
+    file: UploadFile = File(..., description="PDF/Word/TXT/Markdown 文档"),
     strategy: str = Form("paragraphs", description="切分策略：paragraphs / chars"),
+    visibility: str = Form("tenant", description="可见性：tenant / private / roles"),
+    allowed_roles: Optional[str] = Form(
+        None, description="visibility=roles 时可见的角色编码（逗号分隔）"
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """上传 → 解析 → 切分 → Embedding → 向量入库，全程返回处理摘要"""
     _require_write(current_user, db)
     tenant_id = _require_tenant(current_user)
+
+    try:
+        normalized_roles = validate_visibility(visibility, allowed_roles)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
     ext = Path(file.filename or "").suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
@@ -107,8 +122,16 @@ async def upload_document(
             c.source_file = file.filename or "unnamed"
 
         embeddings = await embedder.embed_texts([c.text for c in chunks])
+        # 可见性写入向量元数据，检索阶段据此过滤（与文档表同名字段对应）
         await asyncio.to_thread(
-            vector_store.add_chunks, chunks, embeddings, doc_id, tenant_id
+            vector_store.add_chunks,
+            chunks,
+            embeddings,
+            doc_id,
+            tenant_id,
+            visibility,
+            current_user.id,
+            normalized_roles,
         )
 
         doc = Document(
@@ -119,6 +142,8 @@ async def upload_document(
             file_size=file_path.stat().st_size,
             chunk_count=len(chunks),
             chunk_strategy=strategy,
+            visibility=visibility,
+            allowed_roles=normalized_roles,
             uploader_id=current_user.id,
         )
         db.add(doc)
@@ -154,20 +179,28 @@ def list_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    分页列出文档（按可见性过滤）。
+
+    可见性判定复用 core/doc_permission，与向量检索保持同一套规则；
+    文档量级在租户内有限，故在应用层过滤后分页。
+    """
     tenant_id = _require_tenant(current_user)
-    total = (
-        db.query(Document)
-        .filter(Document.tenant_id == tenant_id)
-        .count()
-    )
-    items = (
-        db.query(Document)
+    role_code = get_role_code(current_user, db)
+
+    visible = [
+        d
+        for d in db.query(Document)
         .filter(Document.tenant_id == tenant_id)
         .order_by(Document.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
         .all()
-    )
+        if can_access(
+            d.visibility, d.uploader_id, d.allowed_roles, current_user.id, role_code
+        )
+    ]
+    total = len(visible)
+    items = visible[(page - 1) * page_size : page * page_size]
+
     return DocumentListResponse(
         items=[
             DocumentItem(
@@ -177,6 +210,9 @@ def list_documents(
                 file_size=d.file_size,
                 chunk_count=d.chunk_count,
                 chunk_strategy=d.chunk_strategy,
+                visibility=d.visibility,
+                allowed_roles=role_list(d.allowed_roles),
+                is_owner=d.uploader_id == current_user.id,
                 created_at=d.created_at,
             )
             for d in items
@@ -194,6 +230,9 @@ async def delete_document(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    删除文档。仅上传者本人或 admin 可删除（避免他人删除共享文档）。
+    """
     _require_write(current_user, db)
     tenant_id = _require_tenant(current_user)
 
@@ -204,6 +243,12 @@ async def delete_document(
     )
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+
+    if doc.uploader_id != current_user.id and get_role_code(current_user, db) != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="仅上传者本人或管理员可删除该文档",
+        )
 
     await asyncio.to_thread(vector_store.delete_document, doc_id, tenant_id)
     db.delete(doc)
@@ -223,11 +268,17 @@ async def search_documents(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """问题向量化 → 向量检索 Top-K，强制按租户过滤"""
+    """问题向量化 → 向量检索 Top-K，强制按租户 + 可见性过滤"""
     tenant_id = _require_tenant(current_user)
+    role_code = get_role_code(current_user, db)
     query_embedding = (await embedder.embed_texts([q]))[0]
     results = await asyncio.to_thread(
-        vector_store.search, query_embedding, tenant_id, top_k, doc_id
+        vector_store.search,
+        query_embedding,
+        tenant_id,
+        top_k,
+        doc_id,
+        make_chunk_filter(current_user.id, role_code),
     )
     return DocumentSearchResponse(
         query=q,

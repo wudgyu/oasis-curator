@@ -10,6 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.doc_permission import make_chunk_filter
+from app.core.permission import get_role_code
 from app.core.rag_pipeline import rag_pipeline
 from app.database import get_db
 from app.models.user import User
@@ -36,10 +38,12 @@ async def ask(
 ):
     """检索增强问答：回答附引用标注，文档中无答案时明确拒答"""
     tenant_id = _require_tenant(current_user)
+    role_code = get_role_code(current_user, db)
     result = await rag_pipeline.answer(
         question=req.question,
         tenant_id=tenant_id,
         doc_id=req.doc_id,
+        visibility_filter=make_chunk_filter(current_user.id, role_code),
     )
     return QaAskResponse(
         answer=result.answer,
