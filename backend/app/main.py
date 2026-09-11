@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.database import engine, Base
 
 # 导入所有模型，确保 create_all 能发现它们
-from app.models import tenant, organization, role, user, document  # noqa: F401
+from app.models import tenant, organization, role, user, document, conversation  # noqa: F401
 
 # 导入 API 路由
 from app.api.auth import router as auth_router
@@ -25,6 +25,7 @@ from app.api.roles import router as roles_router
 from app.api.iam_config import router as iam_router
 from app.api.documents import router as documents_router
 from app.api.qa import router as qa_router
+from app.api.conversations import router as conversations_router
 
 
 @asynccontextmanager
@@ -59,6 +60,7 @@ app.include_router(roles_router)
 app.include_router(iam_router)
 app.include_router(documents_router)
 app.include_router(qa_router)
+app.include_router(conversations_router)
 
 
 @app.get("/api/health")

@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import AsyncGenerator, Callable, List, Optional
 
 from app.core.config import settings
 from app.core.embedder import embedder
@@ -300,6 +300,88 @@ class RagPipeline:
 
         answer.citations = self._extract_citations(answer.answer)
         return answer
+
+    # ------------------------------------------------------------------
+    # 流式链路（供 SSE 接口使用）
+    # ------------------------------------------------------------------
+
+    async def answer_stream(
+        self,
+        question: str,
+        tenant_id: str,
+        top_k: int = TOP_K_RETRIEVAL,
+        top_n: int = TOP_K_RERANK,
+        doc_id: Optional[str] = None,
+        visibility_filter: Optional[Callable[[dict], bool]] = None,
+    ) -> AsyncGenerator[dict, None]:
+        """
+        流式 RAG 问答，产出事件字典：
+
+            {"type": "meta",  "retrieved_count": int, "reranked": [...]}
+            {"type": "token", "text": str}
+            {"type": "done",  "answer": str, "refused": bool, "citations": [...],
+                              "provider": str, "model": str}
+
+        检索与重排序必须完成后才能开始生成（需要上下文），
+        因此 meta 事件先于 token 事件发出，供前端即时展示引用来源。
+        """
+        results = await self.retrieve(question, tenant_id, top_k, doc_id, visibility_filter)
+        reranked = await self.rerank(question, results, top_n)
+
+        yield {
+            "type": "meta",
+            "retrieved_count": len(results),
+            "reranked": [
+                {
+                    "score": c.score,
+                    "reason": c.reason,
+                    "text": c.chunk.text[:200],
+                    "source_file": c.chunk.source_file,
+                    "chunk_index": c.chunk.chunk_index,
+                    "page": c.chunk.page,
+                }
+                for c in reranked
+            ],
+        }
+
+        # 拒答判定：无候选或最高分低于阈值 → 不调用 LLM，直接给出拒答
+        if not reranked or max(c.score for c in reranked) < MIN_RERANK_SCORE:
+            yield {
+                "type": "done",
+                "answer": REFUSE_ANSWER,
+                "refused": True,
+                "citations": [],
+                "provider": "",
+                "model": "",
+            }
+            return
+
+        messages = [
+            {
+                "role": "system",
+                "content": "你是 Oasis Curator 文档问答助手，只依据参考资料回答，实事求是。",
+            },
+            {"role": "user", "content": self._build_generation_prompt(question, reranked)},
+        ]
+
+        parts: List[str] = []
+        async for token in self._llm.chat_stream(messages, temperature=0.3):
+            parts.append(token)
+            yield {"type": "token", "text": token}
+
+        answer_text = "".join(parts)
+        provider = self._llm.last_provider or ""
+        model = ""
+        refused = REFUSE_ANSWER in answer_text
+        citations = [] if refused else self._extract_citations(answer_text)
+        yield {
+            "type": "done",
+            "answer": answer_text,
+            "refused": refused,
+            "citations": citations,
+            "provider": provider,
+            "model": model,
+        }
 
 
 # 模块级实例：供 API 与脚本直接使用
