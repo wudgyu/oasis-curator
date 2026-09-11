@@ -197,5 +197,6 @@ frontend/.vite/
 !frontend/.npmrc
 !frontend/.nvmrc
 
-# 示例 PDF 为脚本生成产物（make_sample_pdf.py），不入库
+# 示例 PDF / Word 为脚本生成产物（make_sample_pdf.py / make_sample_docx.py），不入库
 backend/data/samples/*.pdf
+backend/data/samples/*.docx

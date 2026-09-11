@@ -11,3 +11,4 @@ openai>=1.58.0,<2.0.0
 pdfplumber==0.11.10
 httpx==0.28.1
 pysqlite3-binary==0.5.4.post2
+python-docx==1.2.0
