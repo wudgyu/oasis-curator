@@ -175,3 +175,52 @@ export interface IamRoleItem {
   data_scope: Record<string, unknown> | null
   created_at: string
 }
+// ==================== 文档管理（RAG） ====================
+
+/** 文档可见性：tenant 租户公开 / private 仅上传者 / roles 指定角色 */
+export type DocVisibility = 'tenant' | 'private' | 'roles'
+
+/** 切分策略 */
+export type ChunkStrategy = 'paragraphs' | 'chars'
+
+/** 文档列表项（对接 /api/documents） */
+export interface DocItem {
+  id: string
+  fileName: string
+  fileType: string
+  fileSize: number
+  chunkCount: number
+  chunkStrategy: ChunkStrategy
+  visibility: DocVisibility
+  allowedRoles: RoleCode[]
+  isOwner: boolean
+  createdAt: string
+}
+
+/** 文档上传参数 */
+export interface DocUploadParams {
+  strategy: ChunkStrategy
+  visibility: DocVisibility
+  allowedRoles?: RoleCode[]
+}
+
+/** 文档上传结果 */
+export interface DocUploadResult {
+  id: string
+  fileName: string
+  fileType: string
+  charCount: number
+  pageCount: number
+  chunkCount: number
+  chunkStrategy: ChunkStrategy
+}
+
+/** 语义检索命中块（对接 /api/documents/search） */
+export interface SearchChunk {
+  text: string
+  score: number
+  sourceFile: string
+  chunkIndex: number
+  page: number | null
+  docId: string
+}

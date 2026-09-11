@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '用户管理' },
       },
       {
+        path: 'documents',
+        name: 'DocUpload',
+        component: () => import('@/views/DocUpload.vue'),
+        meta: { title: '文档管理' },
+      },
+      {
         path: 'iam-config',
         name: 'IamConfigGenerator',
         component: () => import('@/views/IamConfigGenerator.vue'),

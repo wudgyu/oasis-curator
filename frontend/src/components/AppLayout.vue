@@ -10,6 +10,7 @@ import {
   SwitchButton,
   MagicStick,
   DocumentChecked,
+  FolderOpened,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { fetchTenants } from '@/api/tenants'
@@ -29,6 +30,7 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { path: '/home', title: '首页', icon: HomeFilled },
+  { path: '/documents', title: '文档管理', icon: FolderOpened },
   { path: '/tenants', title: '租户管理', icon: OfficeBuilding, adminOnly: true },
   { path: '/orgs', title: '组织管理', icon: Share },
   { path: '/users', title: '用户管理', icon: UserFilled },
