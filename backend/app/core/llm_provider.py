@@ -68,6 +68,8 @@ PROVIDER_CONFIGS = {
         "base_url": settings.KIMI_BASE_URL,
         "model": settings.KIMI_MODEL,
         "stream_usage": True,
+        # Kimi K2 系列仅接受 temperature=1，传其他值直接 400
+        "temperature_fixed": 1.0,
     },
     "ark": {
         "api_key": lambda: settings.ARK_API_KEY,
@@ -217,18 +219,26 @@ class LLMProvider:
         base_delay = settings.LLM_RETRY_BASE_DELAY
         backoff = settings.LLM_RETRY_BACKOFF
 
+        provider_cfg = PROVIDER_CONFIGS.get(provider, {})
+        # 部分模型对 temperature 有硬性要求（如 Kimi K2 仅接受 1），以 provider 配置为准
+        fixed_temperature = provider_cfg.get("temperature_fixed")
+
         last_error: Optional[Exception] = None
         for attempt in range(1, max_retries + 1):
             try:
                 request_params: Dict[str, Any] = {
                     "model": model,
                     "messages": messages,
-                    "temperature": kwargs.get("temperature", settings.LLM_TEMPERATURE),
+                    "temperature": (
+                        fixed_temperature
+                        if fixed_temperature is not None
+                        else kwargs.get("temperature", settings.LLM_TEMPERATURE)
+                    ),
                     "max_tokens": kwargs.get("max_tokens", settings.LLM_MAX_TOKENS),
                     "stream": stream,
                 }
                 # 部分模型支持在流式末尾返回 usage（需显式开启）
-                if stream and PROVIDER_CONFIGS.get(provider, {}).get("stream_usage"):
+                if stream and provider_cfg.get("stream_usage"):
                     request_params["stream_options"] = {"include_usage": True}
                 response = await client.chat.completions.create(**request_params)
                 return response, client, provider
