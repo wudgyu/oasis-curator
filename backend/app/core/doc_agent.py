@@ -33,6 +33,23 @@ DEFAULT_MAX_ITERATIONS = 6
 RESULT_PREVIEW_CHARS = 400
 MODE_NATIVE = "native"
 MODE_PROMPT = "prompt"
+MODE_AUTO = "auto"
+
+# 判定"模型不支持原生工具调用"的错误特征（命中即自动降级为 Prompt 注入）
+_TOOLS_UNSUPPORTED_HINTS = (
+    "does not support tools",
+    "tools is not supported",
+    "unsupported parameter",
+    "unknown parameter",
+    "unrecognized request argument",
+    "invalid parameter",
+    "function calling",
+    "tool_calls",
+    "tools",
+)
+
+# 已确认不支持原生工具调用的 provider（同进程内缓存，避免每次重复失败）
+_PROMPT_ONLY_PROVIDERS: set = set()
 
 SYSTEM_PROMPT = """你是 Oasis Curator 的文档处理 Agent，负责根据用户需求编排文档处理流程。
 
@@ -55,7 +72,20 @@ PROMPT_INJECTION_TEMPLATE = """可用工具：
 
 任务完成或无需调用工具时，输出：
 {{"final": "给用户的最终答复"}}
+
+示例：
+用户：帮我看看文档有多少页
+助手：{{"tool": "parse_document", "args": {{}}}}
+（收到工具结果后）
+助手：{{"final": "文档共 3 页。"}}
 """
+
+# 降级模式下模型未按协议输出时的纠偏提示（每轮任务最多纠正一次）
+PROMPT_NUDGE = (
+    "请严格按约定格式回复：需要调用工具时输出 "
+    '{"tool": "工具名", "args": {...}}；任务已完成时输出 {"final": "最终答复"}。'
+    "不要输出其他格式的内容。"
+)
 
 
 @dataclass
@@ -110,6 +140,23 @@ class AgentRun:
         }
 
 
+def _is_tools_unsupported(error: Exception) -> bool:
+    """
+    判断异常是否表示"模型不支持原生工具调用"。
+
+    逐层查看异常链（LLMProvider 会包装成 RuntimeError 并保留原始异常为 __cause__），
+    命中特征词即认为需要降级。属于尽力而为的启发式：宁可漏判（继续报错给用户）
+    也不误判（把网络抖动当成不支持而长期降级）。
+    """
+    texts = [str(error)]
+    cause = error.__cause__
+    while cause is not None:
+        texts.append(str(cause))
+        cause = cause.__cause__
+    lowered = " ".join(texts).lower()
+    return any(hint in lowered for hint in _TOOLS_UNSUPPORTED_HINTS)
+
+
 def _preview(result: Dict[str, Any]) -> str:
     """工具结果的可读摘要（截断），用于轨迹展示"""
     payload = {k: v for k, v in result.items() if k not in ("ok", "tool")}
@@ -144,7 +191,7 @@ class DocumentAgent:
         instruction: str,
         ctx: AgentContext,
         provider: Optional[str] = None,
-        mode: str = MODE_NATIVE,
+        mode: str = MODE_AUTO,
         on_step: Optional[Callable[[AgentStep], Any]] = None,
     ) -> AgentRun:
         """
@@ -154,14 +201,44 @@ class DocumentAgent:
             instruction: 用户自然语言需求
             ctx: 执行上下文（文档、租户、可见性等）
             provider: 指定 LLM provider，None 走默认 + 降级链
-            mode: native（原生工具调用）/ prompt（注入降级）
+            mode: native（原生工具调用）/ prompt（注入降级）/
+                  auto（先原生，模型不支持时自动降级，默认）
             on_step: 每完成一次工具调用后的回调（进度推送）
 
         Returns:
-            AgentRun：最终答复 + 执行轨迹
+            AgentRun：最终答复 + 执行轨迹（mode 字段记录实际使用的模式）
         """
+        if mode != MODE_AUTO:
+            return await self._run_loop(instruction, ctx, provider, mode, on_step)
+
+        # auto：已知不支持原生工具调用的 provider 直接走降级模式
+        if provider and provider in _PROMPT_ONLY_PROVIDERS:
+            return await self._run_loop(instruction, ctx, provider, MODE_PROMPT, on_step)
+
+        try:
+            return await self._run_loop(instruction, ctx, provider, MODE_NATIVE, on_step)
+        except Exception as e:  # noqa: BLE001  需按错误特征决定是否降级
+            if not _is_tools_unsupported(e):
+                raise
+            logger.warning(
+                "provider=%s 不支持原生工具调用，降级为 Prompt 注入模式: %s", provider, e
+            )
+            if provider:
+                _PROMPT_ONLY_PROVIDERS.add(provider)
+            return await self._run_loop(instruction, ctx, provider, MODE_PROMPT, on_step)
+
+    async def _run_loop(
+        self,
+        instruction: str,
+        ctx: AgentContext,
+        provider: Optional[str],
+        mode: str,
+        on_step: Optional[Callable[[AgentStep], Any]],
+    ) -> AgentRun:
+        """Agent 主循环：模型决策 → 执行工具 → 结果回传 → 继续决策"""
         run = AgentRun(instruction=instruction, mode=mode)
         messages = self._build_messages(instruction, ctx, mode)
+        nudged = False  # 降级模式下的协议纠偏是否已用过
 
         for iteration in range(1, self._max_iterations + 1):
             run.iterations = iteration
@@ -181,8 +258,16 @@ class DocumentAgent:
                 else self._parse_prompt_calls(response.content)
             )
 
-            # 无工具调用 → 模型给出最终答复，任务结束
+            # 无工具调用 → 通常视为模型给出最终答复
             if not calls:
+                # 降级模式下模型可能忽略 JSON 协议直接作答（尚未调用过任何工具时）：
+                # 纠偏一次，让它按协议重新决策，提升 fallback 的可靠性
+                if mode == MODE_PROMPT and not nudged and not run.steps:
+                    nudged = True
+                    messages.append({"role": "assistant", "content": response.content or ""})
+                    messages.append({"role": "user", "content": PROMPT_NUDGE})
+                    logger.info("降级模式：模型未按协议输出，已发送纠偏提示")
+                    continue
                 run.answer = self._extract_answer(response.content, mode)
                 return run
 
@@ -190,7 +275,7 @@ class DocumentAgent:
             assistant_message = self._assistant_message(response.content, calls, mode)
             messages.append(assistant_message)
             for index, call in enumerate(calls, start=len(run.steps) + 1):
-                step, tool_message = await self._run_call(ctx, index, call)
+                step, tool_message = await self._run_call(ctx, index, call, mode)
                 run.steps.append(step)
                 messages.append(tool_message)
                 if on_step:
@@ -349,9 +434,16 @@ class DocumentAgent:
         }
 
     async def _run_call(
-        self, ctx: AgentContext, index: int, call: Dict[str, Any]
+        self, ctx: AgentContext, index: int, call: Dict[str, Any], mode: str
     ) -> tuple[AgentStep, Dict[str, Any]]:
-        """执行一次工具调用，返回 (轨迹记录, 回传模型的消息)"""
+        """
+        执行一次工具调用，返回 (轨迹记录, 回传模型的消息)。
+
+        回传格式随模式不同：
+        - native：tool 角色消息（必须能对应上 assistant 的 tool_calls）
+        - prompt：降级模式没有 tool_calls 结构，工具结果以 user 消息形式追加
+          （若仍用 tool 角色，服务端会以 "must be a response to tool_calls" 拒绝）
+        """
         started = time.monotonic()
         result = await execute_tool(ctx, call["name"], call.get("args") or {})
         elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -374,11 +466,16 @@ class DocumentAgent:
             "成功" if step.ok else f"失败: {step.error}",
             elapsed_ms,
         )
-        return step, {
-            "role": "tool",
-            "tool_call_id": call["id"],
-            "content": json.dumps(result, ensure_ascii=False),
-        }
+        payload = json.dumps(result, ensure_ascii=False)
+        if mode == MODE_NATIVE:
+            message = {"role": "tool", "tool_call_id": call["id"], "content": payload}
+        else:
+            message = {
+                "role": "user",
+                "content": f"工具 {call['name']} 执行结果：{payload}\n\n"
+                f"如需继续调用工具，请输出 JSON 指令；否则输出 final 给出最终答复。",
+            }
+        return step, message
 
 
 # 模块级实例：供 API 与脚本直接使用

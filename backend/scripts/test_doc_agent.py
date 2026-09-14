@@ -199,6 +199,15 @@ async def test_prompt_mode() -> None:
         "调用工具时" in llm.calls[0]["messages"][0]["content"],
         True,
     )
+    # 降级模式不得出现 tool 角色消息（无 tool_calls 结构时服务端会 400 拒绝）
+    second_roles = [m.get("role") for m in llm.calls[1]["messages"]]
+    check("降级模式不产生 tool 角色消息", "tool" in second_roles, False)
+    check("工具结果以 user 消息回传", second_roles[-1], "user")
+    check(
+        "回传内容含工具名",
+        "parse_document" in llm.calls[1]["messages"][-1]["content"],
+        True,
+    )
 
 
 async def test_malformed_args() -> None:
@@ -216,6 +225,59 @@ async def test_malformed_args() -> None:
     check("翻译结果进入上下文预览", bool(run.steps[0].result_preview), True)
 
 
+class ToolsUnsupportedLLM(FakeLLM):
+    """模拟不支持原生工具调用的模型：带 tools 参数时直接报错"""
+
+    async def chat(self, messages, provider=None, temperature=None, max_tokens=None, tools=None, tool_choice=None):
+        if tools:
+            raise RuntimeError(
+                "所有 provider 调用均失败，降级链: ['mock']"
+            ) from RuntimeError("Error code: 400 - This model does not support tools")
+        return await super().chat(
+            messages, provider=provider, temperature=temperature, max_tokens=max_tokens
+        )
+
+
+async def test_auto_fallback() -> None:
+    print("\n[7] auto 模式：原生不支持时自动降级")
+    from app.core.doc_agent import MODE_AUTO, _PROMPT_ONLY_PROVIDERS
+
+    _PROMPT_ONLY_PROVIDERS.discard("mock-provider")
+    llm = ToolsUnsupportedLLM(
+        [
+            ([], '{"tool": "parse_document", "args": {}}'),
+            ([], '{"final": "已降级完成解析。"}'),
+        ]
+    )
+    agent = DocumentAgent(llm=llm)
+    run = await agent.run("解析文档", make_ctx(), provider="mock-provider", mode=MODE_AUTO)
+
+    check("自动降级为 prompt 模式", run.mode, MODE_PROMPT)
+    check("降级后仍完成工具调用", [s.tool for s in run.steps], ["parse_document"])
+    check("答复正常返回", run.answer, "已降级完成解析。")
+    check("provider 记入降级名单", "mock-provider" in _PROMPT_ONLY_PROVIDERS, True)
+
+    # 第二次运行：已知不支持，直接走降级模式（不再尝试原生）
+    llm2 = ToolsUnsupportedLLM([([], '{"final": "第二次直接降级。"}')])
+    agent2 = DocumentAgent(llm=llm2)
+    run2 = await agent2.run("再解析一次", make_ctx(), provider="mock-provider", mode=MODE_AUTO)
+    check("二次运行直接降级", run2.mode, MODE_PROMPT)
+    check("降级名单命中时不再携带 tools", llm2.calls[0]["tools"], None)
+
+    # 非工具类错误不应被误判为降级
+    class BrokenLLM(FakeLLM):
+        async def chat(self, *args, **kwargs):
+            raise RuntimeError("连接超时")
+
+    try:
+        await DocumentAgent(llm=BrokenLLM([])).run("解析", make_ctx(), mode=MODE_AUTO)
+        check("网络类错误向上抛出", False, True)
+    except RuntimeError as e:
+        check("网络类错误向上抛出", "连接超时" in str(e), True)
+
+    _PROMPT_ONLY_PROVIDERS.discard("mock-provider")
+
+
 async def main() -> None:
     await test_single_step()
     await test_multi_step_chain()
@@ -223,6 +285,7 @@ async def main() -> None:
     await test_max_iterations()
     await test_prompt_mode()
     await test_malformed_args()
+    await test_auto_fallback()
 
     print(f"\n{'=' * 50}\n通过 {passed} / {passed + failed}")
     sys.exit(0 if failed == 0 else 1)
