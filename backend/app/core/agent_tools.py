@@ -68,6 +68,11 @@ class AgentContext:
             return Path(self.file_path)
 
         candidate = Path(file_path)
+        # 与当前文档同名（模型常按上下文里的文件名回传）：直接沿用上下文路径，
+        # 避免因文件不在上传目录而报"文件不存在"的无谓失败
+        if self.file_path and self.file_name and candidate.name == self.file_name:
+            return Path(self.file_path)
+
         upload_dir = Path(settings.UPLOAD_DIR).resolve()
         # 只接受纯文件名：拒绝绝对路径、目录层级与 .. 穿越
         if candidate.is_absolute() or candidate.name != str(candidate) or ".." in candidate.parts:
@@ -275,9 +280,7 @@ async def translate_text(
     ctx: AgentContext, target_lang: str, text: Optional[str] = None
 ) -> Dict[str, Any]:
     """LLM 翻译，产物写入 ctx.working_text"""
-    source = ctx.current_text(text)
-    if not source.strip():
-        raise ValueError("没有可翻译的内容（请先解析文档或提供 text 参数）")
+    source = await _ensure_source_text(ctx, text)
 
     for_llm, truncated = _truncate(source)
     response = await ctx.llm.chat(
@@ -324,9 +327,7 @@ async def summarize_text(
     ctx: AgentContext, max_length: int = 200, text: Optional[str] = None
 ) -> Dict[str, Any]:
     """LLM 摘要，产物写入 ctx.summary"""
-    source = ctx.current_text(text) or ctx.parsed_text
-    if not source.strip():
-        raise ValueError("没有可摘要的内容（请先解析文档或提供 text 参数）")
+    source = await _ensure_source_text(ctx, text)
 
     for_llm, truncated = _truncate(source)
     response = await ctx.llm.chat(
@@ -376,10 +377,7 @@ async def index_chunks(
     """切分 → 向量化 → 写入向量库，并登记文档记录"""
     texts = [c.strip() for c in (chunks or []) if c and c.strip()]
     if not texts:
-        source = ctx.current_text(None)
-        if not source.strip():
-            raise ValueError("没有可入库的内容（请先解析文档或提供 chunks 参数）")
-        texts = chunk_by_paragraphs(source)
+        texts = chunk_by_paragraphs(await _ensure_source_text(ctx, None))
 
     if not texts:
         raise ValueError("切分结果为空，无法入库")
@@ -428,6 +426,24 @@ def _new_id() -> str:
     import uuid
 
     return str(uuid.uuid4())
+
+
+async def _ensure_source_text(ctx: AgentContext, text: Optional[str]) -> str:
+    """
+    取待处理文本：显式传入 > 上下文现有文本 > 自动解析当前文档。
+
+    自动解析让工具在模型忘记先调用 parse_document 时也能正常工作，
+    减少无谓的失败往返。
+    """
+    if text and text.strip():
+        return text
+    current = ctx.current_text(None)
+    if current.strip():
+        return current
+    if ctx.file_path:
+        await parse_document(ctx)
+        return ctx.current_text(None)
+    raise ValueError("没有可处理的内容（请先解析文档或提供 text 参数）")
 
 
 def _truncate(text: str, limit: int = MAX_LLM_INPUT_CHARS) -> tuple[str, bool]:

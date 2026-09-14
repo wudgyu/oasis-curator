@@ -42,6 +42,15 @@ class LLMUsage:
 
 
 @dataclass
+class LLMToolCall:
+    """模型请求调用的工具（Function Calling）"""
+
+    id: str
+    name: str
+    arguments: str  # JSON 字符串（模型生成的参数）
+
+
+@dataclass
 class LLMResponse:
     """LLM 调用响应"""
 
@@ -50,6 +59,7 @@ class LLMResponse:
     provider: str
     usage: Optional[LLMUsage] = None
     finish_reason: Optional[str] = None
+    tool_calls: List[LLMToolCall] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +210,7 @@ class LLMProvider:
     async def _call_with_retry(
         self,
         provider: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         stream: bool = False,
         **kwargs: Any,
     ):
@@ -240,6 +250,11 @@ class LLMProvider:
                 # 部分模型支持在流式末尾返回 usage（需显式开启）
                 if stream and provider_cfg.get("stream_usage"):
                     request_params["stream_options"] = {"include_usage": True}
+                # Function Calling：仅在调用方提供工具时透传，避免影响普通对话
+                if kwargs.get("tools"):
+                    request_params["tools"] = kwargs["tools"]
+                    if kwargs.get("tool_choice"):
+                        request_params["tool_choice"] = kwargs["tool_choice"]
                 response = await client.chat.completions.create(**request_params)
                 return response, client, provider
             except Exception as e:
@@ -274,22 +289,26 @@ class LLMProvider:
 
     async def chat(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         provider: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
     ) -> LLMResponse:
         """
-        非流式对话，支持自动降级。
+        非流式对话，支持自动降级与 Function Calling。
 
         Args:
-            messages: 对话消息列表 [{"role": "user", "content": "..."}]
+            messages: 对话消息列表；工具场景下可含 assistant(tool_calls) 与 tool 角色消息
             provider: 指定 provider，None 则使用默认 + 降级链
             temperature: 温度参数，None 使用默认配置
             max_tokens: 最大输出 token，None 使用默认配置
+            tools: OpenAI 兼容的工具定义列表；提供时模型可返回 tool_calls
+            tool_choice: "auto" / "none" / "required"，None 由服务端默认
 
         Returns:
-            LLMResponse 包含回复内容、模型、provider、用量信息
+            LLMResponse 包含回复内容、模型、provider、用量信息与工具调用请求
         """
         chain = self._resolve_chain(provider)
 
@@ -302,6 +321,8 @@ class LLMProvider:
                     stream=False,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 )
                 choice = resp.choices[0]
                 usage = None
@@ -319,6 +340,7 @@ class LLMProvider:
                     provider=used_provider,
                     usage=usage,
                     finish_reason=choice.finish_reason,
+                    tool_calls=self._parse_tool_calls(choice.message),
                 )
             except Exception as e:
                 last_error = e
@@ -328,6 +350,24 @@ class LLMProvider:
         raise RuntimeError(
             f"所有 provider 调用均失败，降级链: {chain}"
         ) from last_error
+
+    @staticmethod
+    def _parse_tool_calls(message: Any) -> List[LLMToolCall]:
+        """把 SDK 返回的 tool_calls 转成内部结构"""
+        calls = getattr(message, "tool_calls", None) or []
+        parsed: List[LLMToolCall] = []
+        for call in calls:
+            function = getattr(call, "function", None)
+            if function is None:
+                continue
+            parsed.append(
+                LLMToolCall(
+                    id=getattr(call, "id", "") or "",
+                    name=getattr(function, "name", "") or "",
+                    arguments=getattr(function, "arguments", "") or "",
+                )
+            )
+        return parsed
 
     async def chat_stream(
         self,
