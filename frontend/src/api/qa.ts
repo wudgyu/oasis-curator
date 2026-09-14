@@ -1,4 +1,5 @@
 import request from '@/utils/request'
+import { streamSse } from '@/utils/sse'
 import type {
   ConversationDetail,
   ConversationItem,
@@ -123,44 +124,6 @@ export interface StreamHandlers {
   onError?: (message: string) => void
 }
 
-/** 解析单个 SSE 帧（event: X \n data: {...}） */
-function handleFrame(frame: string, handlers: StreamHandlers): void {
-  let eventName = ''
-  let dataLine = ''
-  for (const line of frame.split('\n')) {
-    if (line.startsWith('event: ')) eventName = line.slice(7).trim()
-    else if (line.startsWith('data: ')) dataLine = line.slice(6)
-  }
-  if (!eventName || !dataLine) return
-
-  const payload = JSON.parse(dataLine)
-  switch (eventName) {
-    case 'meta':
-      handlers.onMeta?.({
-        conversationId: payload.conversation_id,
-        retrievedCount: payload.retrieved_count,
-        sources: (payload.reranked ?? []).map(mapSource),
-      })
-      break
-    case 'token':
-      handlers.onToken?.(payload.text)
-      break
-    case 'done':
-      handlers.onDone?.({
-        answer: payload.answer,
-        refused: payload.refused,
-        citations: payload.citations ?? [],
-        provider: payload.provider ?? '',
-      })
-      break
-    case 'error':
-      handlers.onError?.(payload.message ?? '生成失败')
-      break
-    default:
-      break
-  }
-}
-
 /**
  * 发起流式问答
  *
@@ -171,57 +134,40 @@ export async function askStream(
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const token = localStorage.getItem('token')
-  const response = await fetch('/api/qa/ask/stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
+  await streamSse(
+    '/api/qa/ask/stream',
+    {
       question: payload.question,
       conversation_id: payload.conversationId ?? null,
       doc_id: payload.docId ?? null,
-    }),
-    signal,
-  })
-
-  if (response.status === 401) {
-    // 与 Axios 拦截器保持一致：清除登录态并跳转登录页
-    localStorage.removeItem('token')
-    window.location.hash = '#/login'
-    throw new Error('登录已过期，请重新登录')
-  }
-  if (!response.ok || !response.body) {
-    let detail = `请求失败 (${response.status})`
-    try {
-      const body = await response.json()
-      if (typeof body?.detail === 'string') detail = body.detail
-    } catch {
-      // 非 JSON 响应，保留默认提示
-    }
-    throw new Error(detail)
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      // SSE 帧以空行分隔
-      let boundary = buffer.indexOf('\n\n')
-      while (boundary >= 0) {
-        const frame = buffer.slice(0, boundary)
-        buffer = buffer.slice(boundary + 2)
-        if (frame.trim()) handleFrame(frame, handlers)
-        boundary = buffer.indexOf('\n\n')
+    },
+    (event, data) => {
+      switch (event) {
+        case 'meta':
+          handlers.onMeta?.({
+            conversationId: String(data.conversation_id ?? ''),
+            retrievedCount: Number(data.retrieved_count ?? 0),
+            sources: ((data.reranked as RawMessage['sources']) ?? []).map(mapSource),
+          })
+          break
+        case 'token':
+          handlers.onToken?.(String(data.text ?? ''))
+          break
+        case 'done':
+          handlers.onDone?.({
+            answer: String(data.answer ?? ''),
+            refused: Boolean(data.refused),
+            citations: (data.citations as string[]) ?? [],
+            provider: String(data.provider ?? ''),
+          })
+          break
+        case 'error':
+          handlers.onError?.(String(data.message ?? '生成失败'))
+          break
+        default:
+          break
       }
-    }
-  } finally {
-    reader.releaseLock()
-  }
+    },
+    signal,
+  )
 }

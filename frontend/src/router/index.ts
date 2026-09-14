@@ -57,6 +57,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '文档问答' },
       },
       {
+        path: 'agent',
+        name: 'DocAgent',
+        component: () => import('@/views/DocAgent.vue'),
+        meta: { title: '文档处理 Agent' },
+      },
+      {
         path: 'iam-config',
         name: 'IamConfigGenerator',
         component: () => import('@/views/IamConfigGenerator.vue'),

@@ -33,6 +33,7 @@ const menuItems: MenuItem[] = [
   { path: '/home', title: '首页', icon: HomeFilled },
   { path: '/documents', title: '文档管理', icon: FolderOpened },
   { path: '/qa', title: '文档问答', icon: ChatLineSquare },
+  { path: '/agent', title: '文档处理 Agent', icon: MagicStick },
   { path: '/tenants', title: '租户管理', icon: OfficeBuilding, adminOnly: true },
   { path: '/orgs', title: '组织管理', icon: Share },
   { path: '/users', title: '用户管理', icon: UserFilled },

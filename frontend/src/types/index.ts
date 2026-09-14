@@ -271,3 +271,39 @@ export interface StreamAskPayload {
   conversationId?: string | null
   docId?: string | null
 }
+
+// ==================== 文档处理 Agent ====================
+
+/** 一次工具调用的执行记录 */
+export interface AgentStep {
+  index: number
+  tool: string
+  args: Record<string, unknown>
+  ok: boolean
+  elapsedMs: number
+  resultPreview: string
+  error: string | null
+  result: Record<string, unknown>
+}
+
+/** Agent 执行结果（含完整轨迹） */
+export interface AgentRun {
+  instruction: string
+  answer: string
+  steps: AgentStep[]
+  provider: string
+  model: string
+  mode: string
+  iterations: number
+  finished: boolean
+}
+
+/** Agent 执行参数 */
+export interface AgentRunParams {
+  instruction: string
+  docId?: string | null
+  visibility?: DocVisibility
+  allowedRoles?: RoleCode[]
+  provider?: string | null
+  mode?: string
+}
