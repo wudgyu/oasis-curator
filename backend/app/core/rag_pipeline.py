@@ -30,6 +30,9 @@ TOP_K_RERANK = 3
 # 重排序最低分阈值：最高分低于该值视为"文档中无答案"，直接拒答（省一次生成调用）
 MIN_RERANK_SCORE = 4
 
+# 重排序调用的输出预算（需覆盖推理模型思考 + JSON 输出）
+RERANK_MAX_TOKENS = 2000
+
 # 引用标注解析：[来源: 文件名, 第N段]
 # 标点与空格需宽容：模型输出常用全角「，」「：」，段号两侧也可能带空格
 CITATION_RE = re.compile(
@@ -161,21 +164,22 @@ class RagPipeline:
         ]
 
         try:
-            response = await self._llm.chat(messages, temperature=0, max_tokens=600)
+            # 预算需覆盖推理模型（如 deepseek-flash）的思考 token + JSON 输出，
+            # 过小会导致输出被截断、JSON 解析失败
+            response = await self._llm.chat(messages, temperature=0, max_tokens=RERANK_MAX_TOKENS)
         except Exception as e:
             logger.warning("重排序 LLM 调用失败，退化向量序: %s", e)
-            return [
-                RerankedChunk(chunk=r, score=0, reason="重排序失败，按向量序保留")
-                for r in results[:top_n]
-            ]
+            return self._fallback_ranking(results, top_n, "重排序调用失败")
+
+        if response.finish_reason == "length":
+            logger.warning(
+                "重排序输出被截断（max_tokens=%d 不足），已退化向量序", RERANK_MAX_TOKENS
+            )
 
         parsed = _extract_json(response.content)
         if parsed is None:
             logger.warning("重排序输出解析失败，退化向量序")
-            return [
-                RerankedChunk(chunk=r, score=0, reason="解析失败，按向量序保留")
-                for r in results[:top_n]
-            ]
+            return self._fallback_ranking(results, top_n, "重排序输出解析失败")
 
         scored: List[RerankedChunk] = []
         for item in parsed.get("scores", []):
@@ -193,6 +197,25 @@ class RagPipeline:
             return results[:top_n]
         scored.sort(key=lambda c: c.score, reverse=True)
         return scored[:top_n]
+
+    @staticmethod
+    def _fallback_ranking(
+        results: List[SearchResult], top_n: int, reason: str
+    ) -> List[RerankedChunk]:
+        """
+        重排序不可用时的降级排序：用向量相似度折算为 1-10 分。
+
+        注意不能直接给 0 分——那会让拒答门控把所有查询判为"文档中无答案"，
+        把一次重排序故障误变成拒答。折算后高分候选仍可正常参与生成。
+        """
+        return [
+            RerankedChunk(
+                chunk=r,
+                score=max(1, min(10, round(r.score * 10))),
+                reason=f"{reason}，按向量相似度折算",
+            )
+            for r in results[:top_n]
+        ]
 
     # ------------------------------------------------------------------
     # 生成

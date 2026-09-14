@@ -111,12 +111,19 @@ def main() -> None:
         check("消息数累加为 4", len(detail2["messages"]), 4)
 
         # ---------- 3. 拒答路径 ----------
+        # 拒答有两道防线：重排序门控（低于阈值直接拦下，无 token）
+        # 与生成端标准话术（模型判定无答案，随后处理标记 refused）
         print("\n[3] 拒答路径")
         events3 = stream_ask(client, h_zhang, "平台支持哪些数据库的 SQL 方言？")
         done3 = by_name(events3, "done")[0]
         check("拒答标记为 true", done3["refused"], True)
         check("拒答不含引用", done3["citations"], [])
-        check("拒答不产生 token", len(by_name(events3, "token")), 0)
+        check("拒答回答为标准话术", "没有相关信息" in done3["answer"], True)
+        gate_or_generator = (
+            len(by_name(events3, "token")) == 0  # 门控拦截
+            or "没有相关信息" in done3["answer"]  # 生成端拒答
+        )
+        check("拒答由门控或生成端触发", gate_or_generator, True)
 
         # ---------- 4. 会话归属隔离 ----------
         print("\n[4] 会话归属隔离")
