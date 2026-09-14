@@ -161,6 +161,44 @@ async def test_index() -> None:
         db.commit()
 
 
+async def test_extensibility() -> None:
+    """验收点：新增一个工具只需「一个函数 + 一段 Schema」，Agent 侧无需改动"""
+    print("\n[7] 工具可扩展性")
+    from app.core.agent_tools import TOOL_REGISTRY, get_tool_schemas, tool
+
+    before = len(get_tool_schemas())
+
+    @tool(
+        name="count_words",
+        description="统计文本的字数（演示新增工具的最小改动）",
+        parameters={
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "待统计文本"}},
+            "required": [],
+        },
+    )
+    async def count_words(ctx: AgentContext, text: str | None = None):
+        source = await _resolve_text(ctx, text)
+        return {"char_count": len(source), "preview": source[:30]}
+
+    from app.core.agent_tools import _ensure_source_text as _resolve_text  # noqa: E501  取自工具内部辅助
+
+    try:
+        check("新工具已登记", "count_words" in TOOL_REGISTRY, True)
+        check("工具数 +1", len(get_tool_schemas()), before + 1)
+        check(
+            "Schema 自动进入工具列表",
+            any(s["function"]["name"] == "count_words" for s in get_tool_schemas()),
+            True,
+        )
+        result = await execute_tool(make_ctx(PDF_PLAIN), "count_words", {})
+        check("新工具可直接执行", result["ok"], True)
+        check("执行结果可用", result["char_count"] > 1000, True)
+    finally:
+        TOOL_REGISTRY.pop("count_words", None)
+    check("清理后工具数复原", len(get_tool_schemas()), before)
+
+
 async def test_errors() -> None:
     print("\n[6] 错误路径")
     ctx = make_ctx(PDF_WITH_TABLES)
@@ -195,6 +233,7 @@ async def main() -> None:
     await test_extract_tables()
     await test_llm_tools()
     await test_index()
+    await test_extensibility()
     await test_errors()
 
     print(f"\n{'=' * 50}\n通过 {passed} / {passed + failed}")
