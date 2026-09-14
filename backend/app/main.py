@@ -26,6 +26,7 @@ from app.api.iam_config import router as iam_router
 from app.api.documents import router as documents_router
 from app.api.qa import router as qa_router
 from app.api.conversations import router as conversations_router
+from app.api.agent import router as agent_router
 
 
 @asynccontextmanager
@@ -61,6 +62,7 @@ app.include_router(iam_router)
 app.include_router(documents_router)
 app.include_router(qa_router)
 app.include_router(conversations_router)
+app.include_router(agent_router)
 
 
 @app.get("/api/health")

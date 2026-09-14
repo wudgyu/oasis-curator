@@ -20,6 +20,15 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".markdown"}
 
+# 反向映射：解析出的 file_type → 可能的落盘扩展名
+# （上传接口以 {doc_id}{ext} 保存文件，按 doc_id 定位原文件时用）
+FILE_TYPE_EXTENSIONS = {
+    "pdf": (".pdf",),
+    "word": (".docx",),
+    "markdown": (".md", ".markdown"),
+    "txt": (".txt",),
+}
+
 # 表格在正文中的分隔标记，便于人工核对与引用定位
 TABLE_MARKER = "[表格 {n}]"
 
